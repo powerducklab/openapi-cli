@@ -1,0 +1,204 @@
+{
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "durationMs": 1383,
+    "passRate": 100
+  },
+  "results": [
+    {
+      "operationId": "getGet",
+      "path": "/get",
+      "method": "GET",
+      "protocol": "http",
+      "status": "passed",
+      "durationMs": 1267,
+      "response": {
+        "status": 200,
+        "statusText": "OK",
+        "contentType": "application/json",
+        "sizeBytes": 407,
+        "body": {
+          "args": {},
+          "headers": {
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Host": "httpbin.org",
+            "Postman-Token": "5dfa5530-1848-4026-afa2-7e0f69366eb1",
+            "User-Agent": "PostmanRuntime/7.56.1",
+            "X-Amzn-Trace-Id": "Root=1-6aa5ad76-5aa9ded977f3f8f506310a2a"
+          },
+          "origin": "45.253.244.137",
+          "url": "https://httpbin.org/get"
+        },
+        "text": "{\n  \"args\": {}, \n  \"headers\": {\n    \"Accept\": \"*/*\", \n    \"Accept-Encoding\": \"gzip, deflate, br\", \n    \"Cache-Control\": \"no-cache\", \n    \"Host\": \"httpbin.org\", \n    \"Postman-Token\": \"5dfa5530-1848-4026-afa2-7e0f69366eb1\", \n    \"User-Agent\": \"PostmanRuntime/7.56.1\", \n    \"X-Amzn-Trace-Id\": \"Root=1-6aa5ad76-5aa9ded977f3f8f506310a2a\"\n  }, \n  \"origin\": \"45.253.244.137\", \n  \"url\": \"https://httpbin.org/get\"\n}\n",
+        "headers": {
+          "Date": "Sat, 12 Sep 2026 19:52:22 GMT",
+          "Content-Type": "application/json",
+          "Content-Length": "407",
+          "Connection": "keep-alive",
+          "Server": "gunicorn/19.9.0",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Credentials": "true"
+        }
+      },
+      "assertions": [
+        {
+          "name": "status is 200",
+          "passed": true
+        },
+        {
+          "name": "content-type is json",
+          "passed": true
+        },
+        {
+          "name": "response under 5s",
+          "passed": true
+        }
+      ],
+      "timestamp": "2026-09-12T19:52:22.977Z"
+    },
+    {
+      "operationId": "postPost",
+      "path": "/post",
+      "method": "POST",
+      "protocol": "http",
+      "status": "passed",
+      "durationMs": 1339,
+      "response": {
+        "status": 200,
+        "statusText": "OK",
+        "contentType": "application/json",
+        "sizeBytes": 591,
+        "body": {
+          "args": {},
+          "data": "{\n  \"name\": \"string\"\n}",
+          "files": {},
+          "form": {},
+          "headers": {
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Content-Length": "22",
+            "Content-Type": "application/json",
+            "Host": "httpbin.org",
+            "Postman-Token": "6ae9d10f-46a5-4229-8964-7941632c403d",
+            "User-Agent": "PostmanRuntime/7.56.1",
+            "X-Amzn-Trace-Id": "Root=1-6aa5ad76-4354b412108ea2b82f7bf3f9"
+          },
+          "json": {
+            "name": "string"
+          },
+          "origin": "45.253.244.137",
+          "url": "https://httpbin.org/post"
+        },
+        "text": "{\n  \"args\": {}, \n  \"data\": \"{\\n  \\\"name\\\": \\\"string\\\"\\n}\", \n  \"files\": {}, \n  \"form\": {}, \n  \"headers\": {\n    \"Accept\": \"*/*\", \n    \"Accept-Encoding\": \"gzip, deflate, br\", \n    \"Cache-Control\": \"no-cache\", \n    \"Content-Length\": \"22\", \n    \"Content-Type\": \"application/json\", \n    \"Host\": \"httpbin.org\", \n    \"Postman-Token\": \"6ae9d10f-46a5-4229-8964-7941632c403d\", \n    \"User-Agent\": \"PostmanRuntime/7.56.1\", \n    \"X-Amzn-Trace-Id\": \"Root=1-6aa5ad76-4354b412108ea2b82f7bf3f9\"\n  }, \n  \"json\": {\n    \"name\": \"string\"\n  }, \n  \"origin\": \"45.253.244.137\", \n  \"url\": \"https://httpbin.org/post\"\n}\n",
+        "headers": {
+          "Date": "Sat, 12 Sep 2026 19:52:22 GMT",
+          "Content-Type": "application/json",
+          "Content-Length": "591",
+          "Connection": "keep-alive",
+          "Server": "gunicorn/19.9.0",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Credentials": "true"
+        }
+      },
+      "assertions": [
+        {
+          "name": "status is 200",
+          "passed": true
+        },
+        {
+          "name": "body contains url",
+          "passed": true
+        }
+      ],
+      "timestamp": "2026-09-12T19:52:23.075Z"
+    },
+    {
+      "operationId": "getServerError",
+      "path": "/status/500",
+      "method": "GET",
+      "protocol": "http",
+      "status": "passed",
+      "durationMs": 1344,
+      "response": {
+        "status": 500,
+        "statusText": "INTERNAL SERVER ERROR",
+        "contentType": "text/html; charset=utf-8",
+        "sizeBytes": 0,
+        "text": "",
+        "headers": {
+          "Date": "Sat, 12 Sep 2026 19:52:22 GMT",
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Length": "0",
+          "Connection": "keep-alive",
+          "Server": "gunicorn/19.9.0",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Credentials": "true"
+        }
+      },
+      "assertions": [
+        {
+          "name": "status is 500",
+          "passed": true
+        }
+      ],
+      "timestamp": "2026-09-12T19:52:23.093Z"
+    },
+    {
+      "operationId": "getStream",
+      "path": "/stream/10",
+      "method": "GET",
+      "protocol": "sse",
+      "status": "passed",
+      "durationMs": 1318,
+      "response": {
+        "status": 200,
+        "statusText": "OK",
+        "contentType": "application/json",
+        "sizeBytes": 0,
+        "body": {},
+        "headers": {
+          "Date": "Sat, 12 Sep 2026 19:52:23 GMT",
+          "Content-Type": "application/json",
+          "Transfer-Encoding": "chunked",
+          "Connection": "keep-alive",
+          "Server": "gunicorn/19.9.0",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Credentials": "true"
+        },
+        "events": [],
+        "streaming": true
+      },
+      "assertions": [
+        {
+          "name": "HTTP status is 2xx (implicit)",
+          "passed": true
+        }
+      ],
+      "timestamp": "2026-09-12T19:52:23.075Z"
+    }
+  ],
+  "config": {
+    "specPath": "./examples/openapi.json",
+    "outputDir": "./openapi-cli-report",
+    "formats": [
+      "json",
+      "cli",
+      "html"
+    ],
+    "concurrency": 5,
+    "timeout": 30000,
+    "tls": {},
+    "failOnError": true,
+    "grpcReflection": true,
+    "mcpTransport": "streamable-http"
+  },
+  "generatedAt": "2026-09-12T19:52:23.104Z",
+  "version": "0.1.0"
+}

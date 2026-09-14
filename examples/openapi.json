@@ -1,0 +1,79 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "Powerduck Example API",
+    "version": "1.0.0",
+    "description": "Example OpenAPI document for @powerduck/openapi-cli batch testing"
+  },
+  "servers": [{ "url": "https://httpbin.org" }],
+  "paths": {
+    "/get": {
+      "get": {
+        "operationId": "getGet",
+        "tags": ["http"],
+        "description": "Simple GET request",
+        "responses": { "200": { "description": "ok" } },
+        "x-tests": [
+          { "name": "status is 200", "assert": "status", "value": 200 },
+          {
+            "name": "content-type is json",
+            "assert": "header",
+            "key": "content-type",
+            "contains": "application/json"
+          },
+          { "name": "response under 5s", "assert": "responseTime", "max": 5000 }
+        ]
+      }
+    },
+    "/post": {
+      "post": {
+        "operationId": "postPost",
+        "tags": ["http"],
+        "description": "Simple POST request with body",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "name": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "ok" } },
+        "x-tests": [
+          { "name": "status is 200", "assert": "status", "value": 200 },
+          {
+            "name": "body contains url",
+            "assert": "bodyContains",
+            "contains": "httpbin.org"
+          }
+        ]
+      }
+    },
+    "/status/500": {
+      "get": {
+        "x-postman-scripts": {
+          "test": "pm.test('status is 500', () => pm.response.to.have.status(500));"
+        },
+        "operationId": "getServerError",
+        "tags": ["http"],
+        "description": "Returns 500 - demonstrates failed assertion",
+        "responses": { "500": { "description": "error" } }
+      }
+    },
+    "/stream/10": {
+      "get": {
+        "operationId": "getStream",
+        "tags": ["sse"],
+        "description": "SSE streaming endpoint",
+        "responses": {
+          "200": {
+            "description": "stream",
+            "content": { "text/event-stream": {} }
+          }
+        }
+      }
+    }
+  }
+}
