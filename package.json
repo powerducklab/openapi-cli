@@ -50,8 +50,8 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@powerduck/openapi-parser": "^0.3.3",
-    "@powerduck/openapi-request": "^0.2.2",
+    "@powerduck/openapi-parser": "^0.3.5",
+    "@powerduck/openapi-request": "^0.2.7",
     "commander": "^15.0.0"
   },
   "devDependencies": {
