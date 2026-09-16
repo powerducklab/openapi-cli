@@ -224,6 +224,14 @@ import type {
 
 ---
 
+## Links
+
+- [Official Website](https://www.powerduck.com/opensource/openapi-cli.html)
+- [Documentation](https://www.powerduck.com/docs/openapi-cli/introduction/)
+- [Live Demo](https://www.powerduck.com/demo/openapi-cli)
+- [GitHub](https://github.com/powerducklab/openapi-cli)
+- [npm](https://www.npmjs.com/package/@powerduck/openapi-cli)
+
 ## License
 
 MIT © [POWERDUCK LIMITED](https://www.powerduck.com)
