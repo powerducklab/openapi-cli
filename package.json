@@ -1,6 +1,6 @@
 {
   "name": "@powerduck/openapi-cli",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "CI-ready CLI for batch-testing OpenAPI documents across HTTP, SSE, WebSocket, GraphQL, gRPC and MCP",
   "type": "module",
   "main": "./dist/index.cjs",
