@@ -1,16 +1,31 @@
 /**
- * @powerduck/openapi-cli — CI-ready batch testing for OpenAPI 3.2 documents.
+ * @powerduck/openapi-cli — CI-ready batch and scenario testing for OpenAPI 3.2.
  *
- * Programmatic API:
- *   import { runTests, resolveConfig, generateJsonReport, printCliReport, generateHtmlReport } from "@powerduck/openapi-cli";
- *
+ * Batch (flat, concurrent):
+ *   import { runTests, resolveConfig, printCliReport } from "@powerduck/openapi-cli";
  *   const config = resolveConfig({ spec: "./openapi.json" });
  *   const report = await runTests(config);
- *   printCliReport(report);
- *   generateJsonReport(report, "./out");
- *   generateHtmlReport(report, "./out");
+ *
+ * Scenario (ordered, stateful business flow with shared variables):
+ *   import { runScenario } from "@powerduck/openapi-cli";
+ *   const scenario = {
+ *     name: "register then read profile",
+ *     steps: [
+ *       { ref: "POST /register", request: { extract: [{ name: "token", from: "body", path: "$.data.token" }] } },
+ *       { ref: "GET /me", request: { values: { header: { Authorization: "Bearer {{token}}" } } } },
+ *     ],
+ *   };
+ *   const result = await runScenario(scenario, { config, onEvent: console.log });
  */
-export { runTests } from "./runner.js";
+export {
+  runTests,
+  collectOperations,
+  executeStep,
+  buildSummary,
+  formatAssertionError,
+  buildImplicitAssertions,
+} from "./runner.js";
+export { runScenario, resolveSteps, applyExtracts, stepRef } from "./scenario.js";
 export { resolveConfig, loadSpec, isRemoteSpec, DEFAULT_CONFIG, type CliArgs } from "./config.js";
 export {
   runDeclarativeAssertions,
@@ -37,4 +52,14 @@ export type {
   AuthConfig,
   TlsConfig,
   FilterConfig,
+  ScenarioDefinition,
+  ScenarioStep,
+  ScenarioStepRequest,
+  ScenarioExtract,
+  ScenarioStatus,
+  ScenarioStepResult,
+  ScenarioEvent,
+  ScenarioEventType,
+  ScenarioReport,
+  RunScenarioOptions,
 } from "./types.js";

@@ -17,7 +17,7 @@ import {
 
 const VERSION = "0.1.0";
 
-interface OperationInfo {
+export interface OperationInfo {
   path: string;
   method: string;
   operation: any;
@@ -158,7 +158,7 @@ export async function runTests(config: CliConfig): Promise<TestReport> {
   };
 }
 
-function collectOperations(spec: any, config: CliConfig): OperationInfo[] {
+export function collectOperations(spec: any, config: CliConfig): OperationInfo[] {
   const ops: OperationInfo[] = [];
   const methods = ["get", "post", "put", "delete", "patch", "head", "options"];
 
@@ -221,12 +221,53 @@ function matchesFilter(op: OperationInfo, filter?: CliConfig["filter"]): boolean
   return true;
 }
 
+export interface StepExecutionOptions {
+  config: CliConfig;
+  spec: any;
+  /** Active variable scope injected as {{name}} values. */
+  variables?: Record<string, string>;
+  /** Per-step request values (path/query/header/body). */
+  values?: any;
+  /** Override the resolved server URL for this invocation. */
+  serverUrl?: string;
+  /** Declarative assertions added beyond those declared on the operation. */
+  extraAssertions?: DeclarativeAssertion[];
+}
+
+export interface StepExecution {
+  result: TestResult;
+  response: TestResult["response"];
+  /** Resolved request snapshot for the result card. */
+  request?: TestResult["request"];
+  /** Variable scope produced by Postman scripts during this step. */
+  env: Record<string, string>;
+}
+
 async function executeOperation(
   client: ReturnType<typeof createClient>,
   op: OperationInfo,
   config: CliConfig,
   spec: any,
 ): Promise<TestResult> {
+  const execution = await executeStep(client, op, {
+    config,
+    spec,
+    variables: config.variables,
+  });
+  return execution.result;
+}
+
+/**
+ * Execute a single operation with per-step overrides and return the result,
+ * the normalized response, and any variables produced by its scripts. Shared
+ * by the batch runner (runTests) and the ordered scenario engine (runScenario).
+ */
+export async function executeStep(
+  client: ReturnType<typeof createClient>,
+  op: OperationInfo,
+  options: StepExecutionOptions,
+): Promise<StepExecution> {
+  const { config, spec } = options;
   const startedAt = Date.now();
   const base: Omit<TestResult, "status" | "durationMs" | "timestamp"> = {
     operationId: op.operationId,
@@ -236,28 +277,50 @@ async function executeOperation(
   };
 
   try {
-    const assertions = extractAssertions(op.operation, op.pathItem);
+    const specAssertions = extractAssertions(op.operation, op.pathItem);
+    const assertions = [...specAssertions, ...(options.extraAssertions ?? [])];
     const postmanTest = extractPostmanScripts(op.operation);
     const postmanAssertions: any[] = [];
 
     let responseData: TestResult["response"];
+    let requestSnapshot: TestResult["request"];
+    let env: Record<string, string> = {};
 
     switch (op.protocol) {
-      case "grpc":
-        responseData = await executeGrpc(client, op, config);
+      case "grpc": {
+        const grpc = await executeGrpc(client, op, config, options.serverUrl);
+        responseData = grpc.response;
+        requestSnapshot = grpc.request;
         break;
-      case "websocket":
-        responseData = await executeWebSocket(client, op, config);
+      }
+      case "websocket": {
+        const ws = await executeWebSocket(client, op, config, options.serverUrl);
+        responseData = ws.response;
+        requestSnapshot = ws.request;
         break;
-      case "mcp":
-        responseData = await executeMcp(client, op, config);
+      }
+      case "mcp": {
+        const mcp = await executeMcp(client, op, config, options.serverUrl);
+        responseData = mcp.response;
+        requestSnapshot = mcp.request;
         break;
+      }
       case "graphql":
       case "sse":
       case "http":
-      default:
-        responseData = await executeHttp(client, op, config, spec, postmanTest, postmanAssertions);
+      default: {
+        const http = await executeHttp(client, op, config, spec, {
+          postmanTest,
+          postmanAssertions,
+          variables: options.variables,
+          values: options.values,
+          serverUrl: options.serverUrl,
+        });
+        responseData = http.response;
+        requestSnapshot = http.request;
+        env = http.env;
         break;
+      }
     }
 
     const durationMs = Date.now() - startedAt;
@@ -292,24 +355,55 @@ async function executeOperation(
     const allAssertions = [...declResults, ...dedupedPostman, ...implicitAssertions];
     const hasFailures = allAssertions.some((a) => !a.passed);
 
-    return {
+    const result: TestResult = {
       ...base,
       status: hasFailures ? "failed" : "passed",
       durationMs,
+      request: requestSnapshot,
       response: responseData,
       assertions: allAssertions.length ? allAssertions : undefined,
       timestamp: new Date().toISOString(),
     };
+    return { result, response: responseData, request: requestSnapshot, env };
   } catch (error) {
     const durationMs = Date.now() - startedAt;
-    return {
+    const stepValues = options.values as
+      | { header?: Record<string, unknown>; body?: unknown }
+      | undefined;
+    const rawHeaders = {
+      ...(config.headers ?? {}),
+      ...(stepValues?.header ?? {}),
+    };
+    const headers = Object.fromEntries(
+      Object.entries(rawHeaders).map(([key, value]) => [
+        key,
+        value == null ? "" : String(value),
+      ]),
+    );
+    const fallbackRequest: TestResult["request"] = {
+      method: op.method.toUpperCase(),
+      url: options.serverUrl ?? config.serverUrl,
+      ...(Object.keys(headers).length ? { headers } : {}),
+      ...(stepValues?.body !== undefined ? { body: stepValues.body } : {}),
+    };
+    const result: TestResult = {
       ...base,
       status: "error",
       durationMs,
+      request: fallbackRequest,
       error: (error as Error).message ?? String(error),
       timestamp: new Date().toISOString(),
     };
+    return { result, response: undefined, request: fallbackRequest, env: {} };
   }
+}
+
+interface HttpStepContext {
+  postmanTest: string | undefined;
+  postmanAssertions: any[];
+  variables?: Record<string, string>;
+  values?: any;
+  serverUrl?: string;
 }
 
 async function executeHttp(
@@ -317,9 +411,12 @@ async function executeHttp(
   op: OperationInfo,
   config: CliConfig,
   spec: any,
-  postmanTest: string | undefined,
-  postmanAssertions: any[],
-): Promise<TestResult["response"]> {
+  ctx: HttpStepContext,
+): Promise<{
+  response: TestResult["response"];
+  request: TestResult["request"];
+  env: Record<string, string>;
+}> {
   const runnerOptions: any = {};
   if (config.proxy) {
     try {
@@ -346,20 +443,32 @@ async function executeHttp(
     if (Object.keys(requester).length) runnerOptions.requester = requester;
   }
 
+  // Per-step values override sampled defaults; global headers merge underneath.
+  const stepValues = ctx.values as { header?: Record<string, unknown> } | undefined;
+  const mergedHeader: Record<string, unknown> = {
+    ...(config.headers ?? {}),
+    ...(stepValues?.header ?? {}),
+  };
+  const values: any = {
+    ...(config.headers ? { header: config.headers } : {}),
+    ...(stepValues ?? {}),
+    ...(Object.keys(mergedHeader).length ? { header: mergedHeader } : {}),
+  };
+
   const result = await client.send({
     spec,
     target: { path: op.path, method: op.method },
-    serverUrl: config.serverUrl,
-    values: config.headers ? { header: config.headers } : undefined,
+    serverUrl: ctx.serverUrl ?? config.serverUrl,
+    values: Object.keys(values).length ? values : undefined,
     auth: config.auth,
-    variables: config.variables,
+    variables: ctx.variables,
     timeout: config.timeout,
     runner: Object.keys(runnerOptions).length ? runnerOptions : undefined,
-    scripts: postmanTest
-      ? { test: { exec: postmanTest }, fromSpecExtensions: false }
+    scripts: ctx.postmanTest
+      ? { test: { exec: ctx.postmanTest }, fromSpecExtensions: false }
       : undefined,
     onAssertion: (a: any) => {
-      postmanAssertions.push({
+      ctx.postmanAssertions.push({
         name: a.name ?? "assertion",
         passed: a.passed,
         error: formatAssertionError(a.error),
@@ -369,16 +478,43 @@ async function executeHttp(
     maxEvents: 50,
   });
 
+  // Merge the full variable-scope snapshots produced by pre-request and test
+  // scripts so the scenario engine can chain values across ordered steps.
+  const env: Record<string, string> = {};
+  const scriptReport = (result as any).scripts as
+    | {
+        prerequest?: Array<{ environment?: Record<string, string> }>;
+        test?: Array<{ environment?: Record<string, string> }>;
+      }
+    | undefined;
+  if (scriptReport) {
+    for (const outcome of [...(scriptReport.prerequest ?? []), ...(scriptReport.test ?? [])]) {
+      if (outcome.environment) Object.assign(env, outcome.environment);
+    }
+  }
+
+  const request = (result as { request?: TestResult["request"] }).request;
   return {
-    status: result.response?.status,
-    statusText: result.response?.statusText,
-    contentType: result.response?.contentType,
-    sizeBytes: result.response?.sizeBytes,
-    body: result.response?.body,
-    text: (result.response as any)?.text,
-    headers: result.response?.headers,
-    events: (result.response as any)?.events,
-    streaming: (result.response as any)?.streaming,
+    response: {
+      status: result.response?.status,
+      statusText: result.response?.statusText,
+      contentType: result.response?.contentType,
+      sizeBytes: result.response?.sizeBytes,
+      body: result.response?.body,
+      text: (result.response as any)?.text,
+      headers: result.response?.headers,
+      events: (result.response as any)?.events,
+      streaming: (result.response as any)?.streaming,
+    },
+    request: request
+      ? {
+          method: request.method,
+          url: request.url,
+          headers: request.headers,
+          ...(request.body !== undefined ? { body: request.body } : {}),
+        }
+      : undefined,
+    env,
   };
 }
 
@@ -386,9 +522,10 @@ async function executeGrpc(
   client: ReturnType<typeof createClient>,
   op: OperationInfo,
   config: CliConfig,
-): Promise<TestResult["response"]> {
+  serverUrl?: string,
+): Promise<{ response: TestResult["response"]; request: TestResult["request"] }> {
   const xGrpc = op.operation["x-grpc"] ?? {};
-  const address = xGrpc.address ?? config.serverUrl?.replace(/^https?:\/\//, "");
+  const address = xGrpc.address ?? (serverUrl ?? config.serverUrl)?.replace(/^https?:\/\//, "");
   if (!address) throw new Error("gRPC operation requires x-grpc.address or --server");
 
   const session = client.connect({
@@ -423,11 +560,22 @@ async function executeGrpc(
     await session.close();
   }
 
-  return {
+  const response: TestResult["response"] = {
     status: statusEvent?.meta?.code ?? 0,
     statusText: statusEvent?.meta?.statusName,
     body: dataEvents.length === 1 ? dataEvents[0].data : dataEvents.map((e: any) => e.data),
     events: events.map((e: any) => ({ kind: e.kind, direction: e.direction, data: e.data, meta: e.meta })),
+  };
+  const grpcMethod = xGrpc.method ?? op.operationId;
+  return {
+    response,
+    request: {
+      method: grpcMethod,
+      target: xGrpc.service ? `${xGrpc.service}/${grpcMethod}` : grpcMethod,
+      url: address,
+      ...(Object.keys(sample).length ? { body: sample } : {}),
+      ...(config.headers ? { headers: config.headers } : {}),
+    },
   };
 }
 
@@ -435,9 +583,10 @@ async function executeWebSocket(
   client: ReturnType<typeof createClient>,
   op: OperationInfo,
   config: CliConfig,
-): Promise<TestResult["response"]> {
+  serverUrl?: string,
+): Promise<{ response: TestResult["response"]; request: TestResult["request"] }> {
   const xWs = op.operation["x-ws"] ?? {};
-  const url = xWs.url ?? config.serverUrl?.replace(/^http/, "ws");
+  const url = xWs.url ?? (serverUrl ?? config.serverUrl)?.replace(/^http/, "ws");
   if (!url) throw new Error("WebSocket operation requires x-ws.url or --server");
 
   const session = client.connect({
@@ -462,12 +611,21 @@ async function executeWebSocket(
   const events = (session as any).events ?? [];
   const inbound = events.filter((e: any) => e.direction === "in" && e.kind !== "open");
 
-  return {
+  const response: TestResult["response"] = {
     status: 101,
     statusText: "Switching Protocols",
     body: inbound.map((e: any) => e.data),
     events: events.map((e: any) => ({ kind: e.kind, direction: e.direction, data: e.data })),
     streaming: true,
+  };
+  return {
+    response,
+    request: {
+      method: "WS",
+      url,
+      ...(messages.length ? { body: messages.slice(0, 3) } : {}),
+      ...(config.headers ? { headers: config.headers } : {}),
+    },
   };
 }
 
@@ -475,9 +633,10 @@ async function executeMcp(
   client: ReturnType<typeof createClient>,
   op: OperationInfo,
   config: CliConfig,
-): Promise<TestResult["response"]> {
+  serverUrl?: string,
+): Promise<{ response: TestResult["response"]; request: TestResult["request"] }> {
   const xMcp = op.operation["x-mcp"] ?? {};
-  const endpoint = xMcp.endpoint ?? config.serverUrl;
+  const endpoint = xMcp.endpoint ?? serverUrl ?? config.serverUrl;
   const method = xMcp.method ?? "tools/call";
   const name = xMcp.name;
   const args = xMcp.arguments ?? {};
@@ -495,7 +654,10 @@ async function executeMcp(
     await session.open();
     const result = await (session as any).request(method, { name, arguments: args });
     await session.close();
-    return { status: 200, statusText: "OK", body: result };
+    return {
+      response: { status: 200, statusText: "OK", body: result },
+      request: { method, target: name, body: { name, arguments: args } },
+    };
   }
 
   // Streamable HTTP one-shot via client.send.
@@ -521,10 +683,19 @@ async function executeMcp(
     mcp: config.headers ? { headers: config.headers } : undefined,
   });
 
+  const request = (result as { request?: TestResult["request"] }).request;
   return {
-    status: result.response?.status,
-    statusText: result.response?.statusText,
-    body: result.response?.body,
+    response: {
+      status: result.response?.status,
+      statusText: result.response?.statusText,
+      body: result.response?.body,
+    },
+    request: {
+      ...(request ? { url: request.url, headers: request.headers } : {}),
+      method,
+      target: name,
+      body: { name, arguments: args },
+    },
   };
 }
 
@@ -555,7 +726,7 @@ function sampleValue(type: string): unknown {
   }
 }
 
-function buildSummary(results: TestResult[], durationMs: number): TestSummary {
+export function buildSummary(results: TestResult[], durationMs: number): TestSummary {
   const total = results.length;
   const passed = results.filter((r) => r.status === "passed").length;
   const failed = results.filter((r) => r.status === "failed").length;
