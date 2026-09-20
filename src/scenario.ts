@@ -2,11 +2,19 @@
  * Ordered, stateful scenario engine.
  *
  * A scenario runs a sequence of operations in order with a single shared
- * variable scope. Each step can:
+ * variable scope per scenario iteration. Each step can:
  *   - override request values and the server URL,
  *   - extract response values (body JSONPath, header, status) into scope,
  *   - inherit variables produced by earlier steps or by Postman scripts,
- *   - add declarative assertions on top of the operation's own checks.
+ *   - add declarative assertions on top of the operation's own checks,
+ *   - repeat itself over step-level data rows.
+ *
+ * Data-driven iteration:
+ *   - definition.data: the whole sequence runs once per row, each time with a
+ *     fresh scope; extracts never leak across scenario iterations.
+ *   - step.request.data: that step runs once per row inside each scenario
+ *     iteration; row values are local to that execution and only the last
+ *     execution writes extracts back into the flow.
  *
  * Progress is streamed through `onEvent`, and an AbortSignal cancels the run.
  */
@@ -134,6 +142,12 @@ function baseSkippedResult(
   ref: string,
   step: ScenarioStep,
   reason: string,
+  coords?: {
+    scenarioIteration?: number;
+    scenarioIterations?: number;
+    stepIteration?: number;
+    stepIterations?: number;
+  },
 ): ScenarioStepResult {
   return {
     index,
@@ -148,11 +162,13 @@ function baseSkippedResult(
     timestamp: new Date().toISOString(),
     notRun: true,
     notRunReason: reason,
+    ...(coords ?? {}),
   };
 }
 
 /**
- * Execute a scenario in order with a shared variable scope.
+ * Execute a scenario in order with a shared variable scope per scenario
+ * iteration. See the file header for data-driven iteration semantics.
  */
 export async function runScenario(
   definition: ScenarioDefinition,
@@ -176,100 +192,220 @@ export async function runScenario(
   const resolved = resolveSteps(definition, operations);
   const client = createClient();
 
-  const active: Record<string, string> = {
-    ...(config.variables ?? {}),
-    ...(definition.variables ?? {}),
-  };
+  const scenarioRows: Array<Record<string, string> | undefined> =
+    definition.data && definition.data.length ? definition.data : [undefined];
+  const stepCounts = resolved.map(({ step }) =>
+    step.request?.data && step.request.data.length ? step.request.data.length : 1,
+  );
+  const iterations = { scenarioCount: scenarioRows.length, stepCounts };
 
   const stopOnFailure = definition.stopOnFailure !== false;
   const steps: ScenarioStepResult[] = [];
   let status: ScenarioStatus = "passed";
   let halted = false;
+  let cancelled = false;
+  /** Exact grid position (scenario, step, row) of the first halt/cancel. */
+  let haltPos: { s: number; i: number; t: number } | null = null;
+  let haltStatus = "failed";
+  let active: Record<string, string> = {
+    ...(config.variables ?? {}),
+    ...(definition.variables ?? {}),
+  };
 
-  emit({ type: "scenario:start", scenario: definition.name, status });
+  emit({
+    type: "scenario:start",
+    scenario: definition.name,
+    status,
+    scenarioIterations: scenarioRows.length,
+  });
 
-  for (let i = 0; i < resolved.length; i++) {
-    const { step, op, ref } = resolved[i];
-
-    if (signal?.aborted) {
-      status = "cancelled";
-      steps.push(baseSkippedResult(i, ref, step, "Scenario cancelled"));
-      emit({ type: "step:skip", scenario: definition.name, stepIndex: i, step: steps[i] });
-      halted = true;
-      break;
-    }
-
-    if (step.skip) {
-      const skipped = baseSkippedResult(i, ref, step, "Skipped by plan");
-      steps.push(skipped);
-      emit({ type: "step:skip", scenario: definition.name, stepIndex: i, step: skipped });
-      continue;
-    }
-
-    emit({ type: "step:start", scenario: definition.name, stepIndex: i });
-
-    const execution = await executeStep(client, op, {
-      config,
-      spec,
-      variables: { ...active },
-      values: step.request?.values,
-      serverUrl: step.request?.serverUrl,
-      extraAssertions: step.request?.assertions,
-    });
-
-    // Variables set by Postman scripts (diff against the pre-step scope).
-    const before = { ...active };
-    Object.assign(active, execution.env);
-    const scriptContributed: Record<string, string> = {};
-    for (const [key, value] of Object.entries(execution.env)) {
-      if (before[key] !== value) scriptContributed[key] = value;
-    }
-
-    // Declarative extraction takes precedence.
-    const declarative = applyExtracts(step.request?.extract, execution.response);
-    Object.assign(active, declarative);
-
-    const extracted: Record<string, string> = { ...scriptContributed, ...declarative };
-    const stepResult: ScenarioStepResult = {
-      ...execution.result,
-      index: i,
-      ref,
-      name: step.name,
-      extracted: Object.keys(extracted).length ? extracted : undefined,
-      variablesAfter: { ...active },
+  outer: for (let s = 0; s < scenarioRows.length; s++) {
+    // Every scenario iteration starts from an independent variable scope.
+    active = {
+      ...(config.variables ?? {}),
+      ...(definition.variables ?? {}),
+      ...(scenarioRows[s] ?? {}),
     };
-    steps.push(stepResult);
-    emit({
-      type: "step:finish",
-      scenario: definition.name,
-      stepIndex: i,
-      step: stepResult,
-    });
 
-    if (stepResult.status === "error") {
-      status = "error";
-    } else if (stepResult.status === "failed" && status !== "error") {
-      status = "failed";
-    }
+    for (let i = 0; i < resolved.length; i++) {
+      const { step, op, ref } = resolved[i];
+      const stepRows: Array<Record<string, string> | undefined> =
+        step.request?.data && step.request.data.length ? step.request.data : [undefined];
+      const coords = {
+        scenarioIteration: s,
+        scenarioIterations: scenarioRows.length,
+        stepIterations: stepRows.length,
+      };
 
-    if ((stepResult.status === "failed" || stepResult.status === "error") && stopOnFailure) {
-      halted = true;
-      for (let j = i + 1; j < resolved.length; j++) {
-        const tail = resolved[j];
-        const skipped = baseSkippedResult(
-          j,
-          tail.ref,
-          tail.step,
-          `Stopped after ${stepResult.status} step ${i}`,
-        );
-        steps.push(skipped);
-        emit({ type: "step:skip", scenario: definition.name, stepIndex: j, step: skipped });
+      if (signal?.aborted) {
+        status = "cancelled";
+        cancelled = true;
+        halted = true;
+        haltPos = { s, i, t: 0 };
+        break outer;
       }
-      break;
+
+      if (step.skip) {
+        // A plan-skipped step still occupies every declared execution so the
+        // report grid reconciles with scenario x step iteration counts.
+        for (let t = 0; t < stepRows.length; t++) {
+          const skipped = baseSkippedResult(i, ref, step, "Skipped by plan", {
+            ...coords,
+            stepIteration: t,
+          });
+          steps.push(skipped);
+          emit({
+            type: "step:skip",
+            scenario: definition.name,
+            stepIndex: i,
+            step: skipped,
+            ...coords,
+            stepIteration: t,
+          });
+        }
+        continue;
+      }
+
+      for (let t = 0; t < stepRows.length; t++) {
+        if (signal?.aborted) {
+          status = "cancelled";
+          cancelled = true;
+          halted = true;
+          haltPos = { s, i, t };
+          break outer;
+        }
+
+        emit({
+          type: "step:start",
+          scenario: definition.name,
+          stepIndex: i,
+          ...coords,
+          stepIteration: t,
+        });
+
+        const iterationScope = { ...active, ...(stepRows[t] ?? {}) };
+        const execution = await executeStep(client, op, {
+          config,
+          spec,
+          variables: iterationScope,
+          values: step.request?.values,
+          serverUrl: step.request?.serverUrl,
+          extraAssertions: step.request?.assertions,
+        });
+
+        // Variables set by Postman scripts (diff against the execution scope).
+        const scriptContributed: Record<string, string> = {};
+        for (const [key, value] of Object.entries(execution.env)) {
+          if (iterationScope[key] !== value) scriptContributed[key] = value;
+        }
+
+        // Declarative extraction takes precedence.
+        const declarative = applyExtracts(step.request?.extract, execution.response);
+        const extracted: Record<string, string> = {
+          ...scriptContributed,
+          ...declarative,
+        };
+
+        // Only the final step iteration writes values back into the flow so
+        // earlier data rows cannot pollute downstream steps.
+        const isLastStepIteration = t === stepRows.length - 1;
+        if (isLastStepIteration) {
+          Object.assign(active, execution.env, declarative);
+        }
+
+        const stepResult: ScenarioStepResult = {
+          ...execution.result,
+          index: i,
+          ref,
+          name: step.name,
+          ...coords,
+          stepIteration: t,
+          extracted: Object.keys(extracted).length ? extracted : undefined,
+          variablesAfter: isLastStepIteration
+            ? { ...active }
+            : { ...active, ...(stepRows[t] ?? {}), ...extracted },
+        };
+        steps.push(stepResult);
+        emit({
+          type: "step:finish",
+          scenario: definition.name,
+          stepIndex: i,
+          step: stepResult,
+          ...coords,
+          stepIteration: t,
+        });
+
+        if (stepResult.status === "error") {
+          status = "error";
+        } else if (stepResult.status === "failed" && status !== "error") {
+          status = "failed";
+        }
+
+        if (
+          (stepResult.status === "failed" || stepResult.status === "error") &&
+          stopOnFailure
+        ) {
+          halted = true;
+          haltStatus = stepResult.status;
+          haltPos = { s, i, t };
+          break outer;
+        }
+      }
     }
   }
 
-  if (signal?.aborted && status !== "error" && status !== "failed") {
+  // Synthesize one skipped result per execution that never ran so the report
+  // grid always reconciles with the declared scenario x step counts. Reasons
+  // distinguish unrun rows of the failed step, downstream steps in the same
+  // scenario iteration, and steps in future scenario iterations.
+  if (halted && haltPos) {
+    const reasonFor = (s2: number, i2: number): string => {
+      if (cancelled) return "Scenario cancelled";
+      if (s2 === haltPos.s && i2 === haltPos.i) {
+        return `Stopped after ${haltStatus} iteration ${haltPos.t + 1}`;
+      }
+      if (s2 === haltPos.s) {
+        return `Stopped after ${haltStatus} step ${haltPos.i + 1}`;
+      }
+      return `Stopped after ${haltStatus} run ${haltPos.s + 1}`;
+    };
+
+    for (let s2 = haltPos.s; s2 < scenarioRows.length; s2++) {
+      for (let i2 = s2 === haltPos.s ? haltPos.i : 0; i2 < resolved.length; i2++) {
+        const tail = resolved[i2];
+        const tailRows =
+          tail.step.request?.data && tail.step.request.data.length
+            ? tail.step.request.data.length
+            : 1;
+        const startT = s2 === haltPos.s && i2 === haltPos.i ? haltPos.t + 1 : 0;
+        for (let t2 = startT; t2 < tailRows; t2++) {
+          const tailCoords = {
+            scenarioIteration: s2,
+            scenarioIterations: scenarioRows.length,
+            stepIteration: t2,
+            stepIterations: tailRows,
+          };
+          const skipped = baseSkippedResult(
+            i2,
+            tail.ref,
+            tail.step,
+            reasonFor(s2, i2),
+            tailCoords,
+          );
+          steps.push(skipped);
+          emit({
+            type: "step:skip",
+            scenario: definition.name,
+            stepIndex: i2,
+            step: skipped,
+            ...tailCoords,
+          });
+        }
+      }
+    }
+  }
+
+  if (cancelled || (signal?.aborted && status !== "error" && status !== "failed")) {
     status = "cancelled";
   }
 
@@ -282,6 +418,7 @@ export async function runScenario(
     summary: buildSummary(steps, durationMs),
     steps,
     variables: active,
+    iterations,
     config,
     startedAt,
     durationMs,

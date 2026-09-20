@@ -172,6 +172,13 @@ export interface ScenarioExtract {
   key?: string;
 }
 
+/**
+ * One row of data-driven values. Keys are variable names referenced as
+ * {{name}} in step values; values use the same string contract as scenario
+ * variables.
+ */
+export type ScenarioDataRow = Record<string, string>;
+
 /** Per-step request overrides and verification rules. */
 export interface ScenarioStepRequest {
   /** Request values merged over the operation's sampled defaults. */
@@ -182,6 +189,12 @@ export interface ScenarioStepRequest {
   extract?: ScenarioExtract[];
   /** Declarative assertions added on top of the operation's spec assertions. */
   assertions?: DeclarativeAssertion[];
+  /**
+   * Step-level data rows. The step executes once per row; each row's values
+   * layer over the scenario scope only for that execution. Extracts from the
+   * last execution are written back into the scenario scope.
+   */
+  data?: ScenarioDataRow[];
 }
 
 /** A single ordered operation invocation inside a scenario. */
@@ -208,6 +221,12 @@ export interface ScenarioDefinition {
   variables?: Record<string, string>;
   /** Stop at the first failed/error step. Default: true. */
   stopOnFailure?: boolean;
+  /**
+   * Scenario-level data rows. The whole step sequence runs once per row, each
+   * time with a fresh variable scope seeded from the row; extracts never leak
+   * across iterations. An empty/absent array means a single iteration.
+   */
+  data?: ScenarioDataRow[];
 }
 
 export type ScenarioStatus = "passed" | "failed" | "error" | "cancelled";
@@ -219,6 +238,14 @@ export interface ScenarioStepResult extends TestResult {
   /** Resolved operation reference ("METHOD /path"). */
   ref: string;
   name?: string;
+  /** Zero-based scenario-level iteration (definition.data row index). */
+  scenarioIteration?: number;
+  /** Total scenario-level iterations for this run. */
+  scenarioIterations?: number;
+  /** Zero-based step-level iteration (step.request.data row index). */
+  stepIteration?: number;
+  /** Total step-level iterations for this step (>=1). */
+  stepIterations?: number;
   /** Variables written by this step (declarative extraction + scripts). */
   extracted?: Record<string, string>;
   /** Full scenario variable scope after this step completed. */
@@ -244,6 +271,22 @@ export interface ScenarioEvent {
   step?: ScenarioStepResult;
   status?: ScenarioStatus;
   message?: string;
+  /** Zero-based scenario-level iteration (definition.data row index). */
+  scenarioIteration?: number;
+  /** Total scenario-level iterations. */
+  scenarioIterations?: number;
+  /** Zero-based step-level iteration (step.request.data row index). */
+  stepIteration?: number;
+  /** Total step-level iterations for the current step. */
+  stepIterations?: number;
+}
+
+/** Iteration shape of a run: how many times the sequence and each step run. */
+export interface ScenarioIterations {
+  /** Number of full sequence runs (definition.data rows, defaults to 1). */
+  scenarioCount: number;
+  /** Number of executions per step index (step.request.data rows, >=1). */
+  stepCounts: number[];
 }
 
 /** Aggregate result of a full scenario execution. */
@@ -255,6 +298,8 @@ export interface ScenarioReport {
   steps: ScenarioStepResult[];
   /** Final shared variable scope. */
   variables: Record<string, string>;
+  /** Declared execution grid (iteration counts) for report grouping. */
+  iterations?: ScenarioIterations;
   config: CliConfig;
   startedAt: string;
   durationMs: number;
