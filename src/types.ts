@@ -227,6 +227,13 @@ export interface ScenarioDefinition {
    * across iterations. An empty/absent array means a single iteration.
    */
   data?: ScenarioDataRow[];
+  /**
+   * Declared number of full-sequence repetitions. The effective iteration
+   * count is max(iterations, data.length); iterations beyond the data rows
+   * run with an empty scope. Useful for "run this flow N times" requests that
+   * carry no row-specific values. Defaults to 1 when omitted.
+   */
+  iterations?: number;
 }
 
 export type ScenarioStatus = "passed" | "failed" | "error" | "cancelled";

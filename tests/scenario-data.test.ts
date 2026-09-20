@@ -297,3 +297,64 @@ describe("failure handling with data rows", () => {
     expect(skipEvents.filter((e) => /Stopped after failed run/.test(e.reason ?? ""))).toHaveLength(4);
   });
 });
+
+describe("declared scenario iterations", () => {
+  it("repeats the whole sequence N times without data rows", async () => {
+    itemHits.length = 0;
+    downHits.length = 0;
+    const definition = twoStep();
+    definition.iterations = 3;
+    definition.steps[0].request!.values = {};
+    definition.steps[1].request!.assertions = [
+      { name: "token present", assert: "jsonPath", path: "$.saw", exists: true },
+    ];
+
+    const report = await runScenario(definition, { config });
+
+    expect(report.status).toBe("passed");
+    expect(report.iterations).toEqual({ scenarioCount: 3, stepCounts: [1, 1] });
+    expect(itemHits).toHaveLength(3);
+    expect(downHits).toEqual(["t-", "t-", "t-"]);
+    expect(report.steps.filter((s) => s.ref === "GET /items")).toHaveLength(3);
+    expect(report.summary.passed).toBe(6);
+  });
+
+  it("uses max(iterations, data rows) and pads missing rows with an empty scope", async () => {
+    itemHits.length = 0;
+    downHits.length = 0;
+    const definition = twoStep();
+    definition.data = [{ idx: "a" }];
+    definition.iterations = 3;
+    definition.steps[1].request!.assertions = [
+      { name: "token present", assert: "jsonPath", path: "$.saw", exists: true },
+    ];
+
+    const report = await runScenario(definition, { config });
+
+    expect(report.iterations?.scenarioCount).toBe(3);
+    expect(itemHits).toEqual(["a", "{{idx}}", "{{idx}}"]);
+    expect(report.steps).toHaveLength(6);
+  });
+
+  it("continues through every declared iteration when stopOnFailure is false", async () => {
+    itemHits.length = 0;
+    downHits.length = 0;
+    const definition = twoStep();
+    definition.iterations = 3;
+    definition.steps[0].request!.values = {};
+    // The downstream step always fails an equality check; with continue mode
+    // every declared iteration must still execute.
+    definition.steps[1].request!.assertions = [
+      { name: "never", assert: "jsonPath", path: "$.saw", equals: "impossible" },
+    ];
+    definition.stopOnFailure = false;
+
+    const report = await runScenario(definition, { config });
+
+    expect(report.status).toBe("failed");
+    expect(itemHits).toHaveLength(3);
+    expect(downHits).toHaveLength(3);
+    expect(report.steps.filter((s) => s.ref === "GET /items").every((s) => s.status === "passed")).toBe(true);
+    expect(report.steps.filter((s) => s.ref === "GET /down").every((s) => s.status === "failed")).toBe(true);
+  });
+});

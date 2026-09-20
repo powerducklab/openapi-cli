@@ -43,6 +43,9 @@ import type {
 
 const VERSION = "0.1.0";
 
+/** Hard guard against pathological declared iteration counts. */
+const MAX_SCENARIO_ITERATIONS = 1000;
+
 interface ResolvedStep {
   step: ScenarioStep;
   op: OperationInfo;
@@ -192,8 +195,18 @@ export async function runScenario(
   const resolved = resolveSteps(definition, operations);
   const client = createClient();
 
+  const dataRows: Array<Record<string, string> | undefined> =
+    definition.data && definition.data.length ? definition.data : [];
+  // The declared iteration count always wins when it exceeds the data rows;
+  // extra repetitions run with an empty scope instead of being silently dropped.
+  const requestedIterations = Math.trunc(Number(definition.iterations));
+  const declaredIterations =
+    Number.isFinite(requestedIterations) && requestedIterations > 0
+      ? Math.min(requestedIterations, MAX_SCENARIO_ITERATIONS)
+      : 1;
+  const scenarioCount = Math.max(declaredIterations, dataRows.length);
   const scenarioRows: Array<Record<string, string> | undefined> =
-    definition.data && definition.data.length ? definition.data : [undefined];
+    Array.from({ length: scenarioCount }, (_, s) => dataRows[s]);
   const stepCounts = resolved.map(({ step }) =>
     step.request?.data && step.request.data.length ? step.request.data.length : 1,
   );
