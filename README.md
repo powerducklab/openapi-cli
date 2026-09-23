@@ -10,7 +10,7 @@ CI-ready command-line tool for batch-testing OpenAPI 3.2 documents across six pr
 
 Powerduck is an open-source developer tooling platform for teams building modern API workflows.
 
-- **6 Protocols** — HTTP/1.1, HTTP/2, HTTP/3, WebSocket, SSE, and gRPC
+- **6 Protocols** — HTTP, SSE, WebSocket, GraphQL, gRPC, and MCP
 - **Batch Testing** — Run every operation in your OpenAPI spec concurrently
 - **Assertion Engine** — Validate status codes, headers, response bodies, and schemas
 - **3 Report Formats** — JSON for CI, CLI for terminal, HTML for dashboards
@@ -59,7 +59,7 @@ const report = await runTests(config);
 const jsonPath = generateJsonReport(report, config.outputDir);
 const htmlPath = generateHtmlReport(report, config.outputDir);
 
-console.log("Passed:", report.passed, "/", report.total);
+console.log("Passed:", report.summary.passed, "/", report.summary.total);
 ```
 
 ### GitHub Actions CI
@@ -102,7 +102,7 @@ jobs:
 
 ## Features
 
-- **6 protocols** — HTTP/1.1, HTTP/2, HTTP/3, WebSocket, SSE, and gRPC
+- **6 protocols** — HTTP, SSE, WebSocket, GraphQL, gRPC, and MCP
 - **Batch testing** — Run every operation in your OpenAPI spec concurrently
 - **Assertion engine** — Validate status codes, headers, response bodies, and schemas
 - **3 report formats** — JSON for CI, CLI for terminal, HTML for dashboards
@@ -148,35 +148,35 @@ openapi-cli --config ./openapi-cli.config.json
 
 ### Options
 
-| Option             | Type       | Default                | Description                              |
-| ------------------ | ---------- | ---------------------- | ---------------------------------------- |
-| `--spec`           | `string`   | -                      | Path or URL to OpenAPI spec (required)   |
-| `--server`         | `string`   | -                      | Server URL override                      |
-| `--output`         | `string`   | `./openapi-cli-report` | Output directory                         |
-| `--format`         | `string`   | `json,cli,html`        | Output formats (comma-separated)         |
-| `--method`         | `string`   | -                      | Filter by HTTP method (comma-separated)  |
-| `--path`           | `string`   | -                      | Filter by path pattern (comma-separated) |
-| `--tag`            | `string`   | -                      | Filter by tag (comma-separated)          |
-| `--operationId`    | `string`   | -                      | Filter by operationId (comma-separated)  |
-| `--concurrency`    | `number`   | `5`                    | Max concurrent requests                  |
-| `--timeout`        | `number`   | `30000`                | Request timeout in ms                    |
-| `--bearer`         | `string`   | -                      | Bearer token for authentication          |
-| `--header`         | `string[]` | -                      | Custom headers (Key: Value)              |
-| `--variable`       | `string[]` | -                      | Server variables (key=value)             |
-| `--config`         | `string`   | -                      | Path to JSON config file                 |
-| `--env`            | `string`   | -                      | Path to .env file                        |
-| `--failOnError`    | `boolean`  | `true`                 | Exit with non-zero code on test failure  |
-| `--grpcReflection` | `boolean`  | `true`                 | Enable gRPC server reflection            |
-| `--grpcProto`      | `string[]` | -                      | gRPC proto file paths                    |
-| `--mcpTransport`   | `string`   | `streamable-http`      | MCP transport type                       |
-| `--mcpCommand`     | `string`   | -                      | MCP server command (stdio)               |
-| `--mcpArgs`        | `string`   | -                      | MCP server arguments                     |
-| `--mcpCwd`         | `string`   | -                      | MCP server working directory             |
-| `--proxy`          | `string`   | -                      | Proxy URL                                |
-| `--ca`             | `string`   | -                      | CA certificate path                      |
-| `--cert`           | `string`   | -                      | Client certificate path                  |
-| `--key`            | `string`   | -                      | Client key path                          |
-| `--insecure`       | `boolean`  | `false`                | Disable SSL verification                 |
+| Option                | Type       | Default                | Description                                                 |
+| --------------------- | ---------- | ---------------------- | ----------------------------------------------------------- |
+| `--spec`              | `string`   | -                      | Path or URL to OpenAPI spec (required)                      |
+| `--server`            | `string`   | -                      | Server URL override                                         |
+| `--output`            | `string`   | `./openapi-cli-report` | Output directory                                            |
+| `--format`            | `string`   | `json,cli,html`        | Output formats (comma-separated)                            |
+| `--method`            | `string`   | -                      | Filter by HTTP method (comma-separated)                     |
+| `--path`              | `string`   | -                      | Filter by path pattern (comma-separated)                    |
+| `--tag`               | `string`   | -                      | Filter by tag (comma-separated)                             |
+| `--operation-id`      | `string`   | -                      | Filter by operationId (comma-separated)                     |
+| `--concurrency`       | `number`   | `5`                    | Max concurrent requests                                     |
+| `--timeout`           | `number`   | `30000`                | Request timeout in ms                                       |
+| `--bearer`            | `string`   | -                      | Bearer token for authentication                             |
+| `--header`            | `string[]` | -                      | Custom headers (Key: Value)                                 |
+| `--variable`          | `string[]` | -                      | Server variables (key=value)                                |
+| `--config`            | `string`   | -                      | Path to JSON config file                                    |
+| `--env`               | `string`   | -                      | Path to .env file                                           |
+| `--no-fail-on-error`  | `flag`     | off                    | Exit 0 even when tests fail (default: non-zero on failure)  |
+| `--grpc-no-reflection`| `flag`     | off                    | Disable gRPC reflection and use proto files                 |
+| `--grpc-proto`        | `string[]` | -                      | gRPC proto file paths                                       |
+| `--mcp-transport`     | `string`   | `streamable-http`      | MCP transport type                                          |
+| `--mcp-command`       | `string`   | -                      | MCP server command (stdio)                                  |
+| `--mcp-args`          | `string`   | -                      | MCP server arguments                                        |
+| `--mcp-cwd`           | `string`   | -                      | MCP server working directory                                |
+| `--proxy`             | `string`   | -                      | Proxy URL                                                   |
+| `--ca`                | `string`   | -                      | CA certificate path                                         |
+| `--cert`              | `string`   | -                      | Client certificate path                                     |
+| `--key`               | `string`   | -                      | Client key path                                             |
+| `--insecure`          | `flag`     | off                    | Disable SSL verification                                    |
 
 ---
 
@@ -228,7 +228,7 @@ import type {
 
 - [Official Website](https://www.powerduck.com/opensource/openapi-cli.html)
 - [Documentation](https://www.powerduck.com/docs/openapi-cli/introduction/)
-- [Live Demo](https://www.powerduck.com/demo/openapi-cli)
+- [Live Demo](https://www.powerduck.com/demo/)
 - [GitHub](https://github.com/powerducklab/openapi-cli)
 - [npm](https://www.npmjs.com/package/@powerduck/openapi-cli)
 

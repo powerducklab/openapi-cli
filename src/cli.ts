@@ -15,13 +15,14 @@ import {
   generateHtmlReport,
 } from "./reporters/index.js";
 import type { CliArgs } from "./config.js";
+import packageJson from "../package.json";
 
 const program = new Command();
 
 program
   .name("openapi-cli")
   .description("CI-ready CLI for batch-testing OpenAPI 3.2 documents across HTTP, SSE, WebSocket, GraphQL, gRPC and MCP")
-  .version("0.2.0")
+  .version(packageJson.version)
   .requiredOption("-s, --spec <path-or-url>", "Path or URL (http/https) to OpenAPI 3.2 JSON spec")
   .option("-S, --server <url>", "Override server URL from the spec")
   .option("-o, --output <dir>", "Output directory for reports", "./openapi-cli-report")
@@ -92,7 +93,7 @@ async function main() {
     process.exit(2);
   }
 
-  console.log(`\x1b[36mopenapi-cli v0.2.0 — testing ${config.specPath}\x1b[0m`);
+  console.log(`\x1b[36mopenapi-cli v${packageJson.version} — testing ${config.specPath}\x1b[0m`);
   console.log(`\x1b[90mServer: ${config.serverUrl ?? "(from spec)"} | Concurrency: ${config.concurrency} | Timeout: ${config.timeout}ms\x1b[0m\n`);
 
   let report;
