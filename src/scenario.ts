@@ -1,3 +1,4 @@
+import packageJson from "../package.json";
 /**
  * Ordered, stateful scenario engine.
  *
@@ -25,7 +26,7 @@ import {
   executeStep,
   type OperationInfo,
 } from "./runner.js";
-import { loadSpec } from "./config.js";
+import { loadSpec, validateRunConfig } from "./config.js";
 import { resolveJsonPath } from "./assertions.js";
 import type {
   CliConfig,
@@ -41,7 +42,7 @@ import type {
   TestResult,
 } from "./types.js";
 
-const VERSION = "0.1.0";
+const VERSION = packageJson.version;
 
 /** Hard guard against pathological declared iteration counts. */
 const MAX_SCENARIO_ITERATIONS = 1000;
@@ -84,19 +85,26 @@ export function resolveSteps(
     const ref = stepRef(step);
     const op = byRef.get(ref) ?? (ref ? byOperationId.get(ref) : undefined);
     if (!op) {
-      missing.push(`step ${index} ("${step.name ?? ref}") -> ${ref || "<empty ref>"}`);
+      missing.push(
+        `step ${index} ("${step.name ?? ref}") -> ${ref || "<empty ref>"}`,
+      );
       return;
     }
     resolved.push({ step, op, ref: `${op.method.toUpperCase()} ${op.path}` });
   });
 
   if (missing.length) {
-    throw new Error(`Scenario references operations not present in the spec: ${missing.join("; ")}`);
+    throw new Error(
+      `Scenario references operations not present in the spec: ${missing.join("; ")}`,
+    );
   }
   return resolved;
 }
 
-function findHeader(headers: Record<string, string> | undefined, name: string): string | undefined {
+function findHeader(
+  headers: Record<string, string> | undefined,
+  name: string,
+): string | undefined {
   if (!headers) return undefined;
   const lower = name.toLowerCase();
   for (const [key, value] of Object.entries(headers)) {
@@ -108,7 +116,8 @@ function findHeader(headers: Record<string, string> | undefined, name: string): 
 function stringifyValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
   try {
     return JSON.stringify(value);
   } catch {
@@ -178,6 +187,7 @@ export async function runScenario(
   options: RunScenarioOptions,
 ): Promise<ScenarioReport> {
   const { config, onEvent, signal } = options;
+  validateRunConfig(config);
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
 
@@ -191,7 +201,10 @@ export async function runScenario(
 
   const spec = options.spec ?? (await loadSpec(config));
   // Scenario steps may target any operation, ignoring the batch filter.
-  const operations = collectOperations(spec as any, { ...config, filter: undefined });
+  const operations = collectOperations(spec as any, {
+    ...config,
+    filter: undefined,
+  });
   const resolved = resolveSteps(definition, operations);
   const client = createClient();
 
@@ -205,10 +218,14 @@ export async function runScenario(
       ? Math.min(requestedIterations, MAX_SCENARIO_ITERATIONS)
       : 1;
   const scenarioCount = Math.max(declaredIterations, dataRows.length);
-  const scenarioRows: Array<Record<string, string> | undefined> =
-    Array.from({ length: scenarioCount }, (_, s) => dataRows[s]);
+  const scenarioRows: Array<Record<string, string> | undefined> = Array.from(
+    { length: scenarioCount },
+    (_, s) => dataRows[s],
+  );
   const stepCounts = resolved.map(({ step }) =>
-    step.request?.data && step.request.data.length ? step.request.data.length : 1,
+    step.request?.data && step.request.data.length
+      ? step.request.data.length
+      : 1,
   );
   const iterations = { scenarioCount: scenarioRows.length, stepCounts };
 
@@ -243,7 +260,9 @@ export async function runScenario(
     for (let i = 0; i < resolved.length; i++) {
       const { step, op, ref } = resolved[i];
       const stepRows: Array<Record<string, string> | undefined> =
-        step.request?.data && step.request.data.length ? step.request.data : [undefined];
+        step.request?.data && step.request.data.length
+          ? step.request.data
+          : [undefined];
       const coords = {
         scenarioIteration: s,
         scenarioIterations: scenarioRows.length,
@@ -300,11 +319,14 @@ export async function runScenario(
         const execution = await executeStep(client, op, {
           config,
           spec,
+          signal,
           variables: iterationScope,
           values: step.request?.values,
           serverUrl: step.request?.serverUrl,
           extraAssertions: step.request?.assertions,
         });
+
+        if (signal?.aborted) cancelled = true;
 
         // Variables set by Postman scripts (diff against the execution scope).
         const scriptContributed: Record<string, string> = {};
@@ -313,7 +335,10 @@ export async function runScenario(
         }
 
         // Declarative extraction takes precedence.
-        const declarative = applyExtracts(step.request?.extract, execution.response);
+        const declarative = applyExtracts(
+          step.request?.extract,
+          execution.response,
+        );
         const extracted: Record<string, string> = {
           ...scriptContributed,
           ...declarative,
@@ -384,7 +409,11 @@ export async function runScenario(
     };
 
     for (let s2 = haltPos.s; s2 < scenarioRows.length; s2++) {
-      for (let i2 = s2 === haltPos.s ? haltPos.i : 0; i2 < resolved.length; i2++) {
+      for (
+        let i2 = s2 === haltPos.s ? haltPos.i : 0;
+        i2 < resolved.length;
+        i2++
+      ) {
         const tail = resolved[i2];
         const tailRows =
           tail.step.request?.data && tail.step.request.data.length
@@ -418,12 +447,16 @@ export async function runScenario(
     }
   }
 
-  if (cancelled || (signal?.aborted && status !== "error" && status !== "failed")) {
+  if (
+    cancelled ||
+    (signal?.aborted && status !== "error" && status !== "failed")
+  ) {
     status = "cancelled";
   }
 
   const durationMs = Date.now() - startedAtMs;
-  const finishType: ScenarioEventType = status === "cancelled" ? "scenario:cancel" : "scenario:finish";
+  const finishType: ScenarioEventType =
+    status === "cancelled" ? "scenario:cancel" : "scenario:finish";
   const report: ScenarioReport = {
     name: definition.name,
     description: definition.description,
@@ -438,6 +471,11 @@ export async function runScenario(
     generatedAt: new Date().toISOString(),
     version: VERSION,
   };
-  emit({ type: finishType, scenario: definition.name, status, message: halted ? "halted" : undefined });
+  emit({
+    type: finishType,
+    scenario: definition.name,
+    status,
+    message: halted ? "halted" : undefined,
+  });
   return report;
 }

@@ -62,9 +62,9 @@ beforeAll(async () => {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
       });
-      res.write("data: {\"seq\":1}\n\n");
-      res.write("data: {\"seq\":2}\n\n");
-      res.write("data: {\"seq\":3}\n\n");
+      res.write('data: {"seq":1}\n\n');
+      res.write('data: {"seq":2}\n\n');
+      res.write('data: {"seq":3}\n\n');
       res.end();
       return;
     }
@@ -94,7 +94,12 @@ beforeAll(async () => {
           responses: { "200": { description: "ok" } },
           "x-tests": [
             { name: "status 200", assert: "status", value: 200 },
-            { name: "content-type json", assert: "header", key: "content-type", contains: "application/json" },
+            {
+              name: "content-type json",
+              assert: "header",
+              key: "content-type",
+              contains: "application/json",
+            },
           ],
         },
         post: {
@@ -120,7 +125,9 @@ beforeAll(async () => {
       "/sse": {
         get: {
           operationId: "getSse",
-          responses: { "200": { description: "ok", content: { "text/event-stream": {} } } },
+          responses: {
+            "200": { description: "ok", content: { "text/event-stream": {} } },
+          },
         },
       },
       "/notfound": {
@@ -157,7 +164,11 @@ describe("runTests basic execution", () => {
     expect(report.summary.total).toBe(6);
     expect(report.results).toHaveLength(6);
     expect(report.generatedAt).toBeDefined();
-    expect(report.version).toBe("0.1.0");
+    expect(report.version).toBe(
+      JSON.parse(
+        fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+      ).version,
+    );
   });
 
   it("marks passing operations correctly", async () => {
@@ -214,7 +225,10 @@ describe("runTests filtering", () => {
       makeConfig({ filter: { operationIds: ["getUsers", "createUser"] } }),
     );
     expect(report.summary.total).toBe(2);
-    expect(report.results.map((r) => r.operationId).sort()).toEqual(["createUser", "getUsers"]);
+    expect(report.results.map((r) => r.operationId).sort()).toEqual([
+      "createUser",
+      "getUsers",
+    ]);
   });
 
   it("filters by tag", async () => {
@@ -223,7 +237,9 @@ describe("runTests filtering", () => {
   });
 
   it("filters by path pattern", async () => {
-    const report = await runTests(makeConfig({ filter: { paths: ["^/users"] } }));
+    const report = await runTests(
+      makeConfig({ filter: { paths: ["^/users"] } }),
+    );
     expect(report.summary.total).toBe(2);
     expect(report.results.every((r) => r.path.startsWith("/users"))).toBe(true);
   });
@@ -236,8 +252,18 @@ describe("runTests concurrency", () => {
   });
 
   it("completes faster with higher concurrency", async () => {
-    const slow = await runTests(makeConfig({ concurrency: 1, filter: { operationIds: ["getSlow", "getUsers"] } }));
-    const fast = await runTests(makeConfig({ concurrency: 2, filter: { operationIds: ["getSlow", "getUsers"] } }));
+    const slow = await runTests(
+      makeConfig({
+        concurrency: 1,
+        filter: { operationIds: ["getSlow", "getUsers"] },
+      }),
+    );
+    const fast = await runTests(
+      makeConfig({
+        concurrency: 2,
+        filter: { operationIds: ["getSlow", "getUsers"] },
+      }),
+    );
     // With concurrency=1, the slow endpoint (100ms) blocks; with 2 they run in parallel.
     // This is a soft assertion — just verify both complete.
     expect(slow.summary.total).toBe(2);
@@ -265,11 +291,15 @@ describe("runTests summary", () => {
 describe("implicit assertions", () => {
   it("marks 404 as failed when no user assertions are defined", async () => {
     const report = await runTests(makeConfig());
-    const notFound = report.results.find((r) => r.operationId === "getNotFound");
+    const notFound = report.results.find(
+      (r) => r.operationId === "getNotFound",
+    );
     expect(notFound?.status).toBe("failed");
     expect(notFound?.response?.status).toBe(404);
     expect(notFound?.assertions).toBeDefined();
-    const implicit = notFound?.assertions?.find((a) => a.name.includes("implicit"));
+    const implicit = notFound?.assertions?.find((a) =>
+      a.name.includes("implicit"),
+    );
     expect(implicit?.passed).toBe(false);
     expect(implicit?.error).toContain("2xx");
   });
@@ -285,7 +315,9 @@ describe("implicit assertions", () => {
   it("does not add implicit assertions when user assertions exist", async () => {
     const report = await runTests(makeConfig());
     const users = report.results.find((r) => r.operationId === "getUsers");
-    const implicit = users?.assertions?.find((a) => a.name.includes("implicit"));
+    const implicit = users?.assertions?.find((a) =>
+      a.name.includes("implicit"),
+    );
     expect(implicit).toBeUndefined();
   });
 });
@@ -325,8 +357,13 @@ describe("$ref resolution", () => {
     const refSpecPath = path.join(tmpDir, "ref-spec.json");
     fs.writeFileSync(refSpecPath, JSON.stringify(refSpec));
     const { loadSpec } = await import("../src/config.js");
-    const resolved = await loadSpec({ specPath: refSpecPath, timeout: 5000 } as any);
-    const schema = resolved.paths["/users"].get.responses["200"].content["application/json"].schema;
+    const resolved = await loadSpec({
+      specPath: refSpecPath,
+      timeout: 5000,
+    } as any);
+    const schema =
+      resolved.paths["/users"].get.responses["200"].content["application/json"]
+        .schema;
     expect(schema.type).toBe("object");
     expect(schema.properties.id.type).toBe("integer");
     expect(schema.properties.name.type).toBe("string");
@@ -355,7 +392,10 @@ describe("$ref resolution", () => {
     const refSpecPath = path.join(tmpDir, "ref-path.json");
     fs.writeFileSync(refSpecPath, JSON.stringify(refSpec));
     const { loadSpec } = await import("../src/config.js");
-    const resolved = await loadSpec({ specPath: refSpecPath, timeout: 5000 } as any);
+    const resolved = await loadSpec({
+      specPath: refSpecPath,
+      timeout: 5000,
+    } as any);
     expect(resolved.paths["/ref-users"].get.operationId).toBe("getUserByRef");
   });
 });
@@ -371,7 +411,10 @@ describe("network configuration", () => {
     // The request will fail to connect through the fake proxy, but the
     // proxy URL itself should be parsed without throwing.
     const report = await runTests(
-      makeConfig({ proxy: "http://proxy.example.com:3128", filter: { operationIds: ["getUsers"] } }),
+      makeConfig({
+        proxy: "http://proxy.example.com:3128",
+        filter: { operationIds: ["getUsers"] },
+      }),
     );
     // The request may error or fail depending on network behavior, but it
     // should not throw during config resolution.
@@ -380,7 +423,10 @@ describe("network configuration", () => {
 
   it("passes TLS strictSSL=false through to runner options", async () => {
     const report = await runTests(
-      makeConfig({ tls: { strictSSL: false }, filter: { operationIds: ["getUsers"] } }),
+      makeConfig({
+        tls: { strictSSL: false },
+        filter: { operationIds: ["getUsers"] },
+      }),
     );
     expect(report.summary.total).toBe(1);
     expect(report.results[0].status).toBe("passed");

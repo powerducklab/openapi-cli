@@ -16,7 +16,7 @@ Powerduck is an open-source developer tooling platform for teams building modern
 - **3 Report Formats** — JSON for CI, CLI for terminal, HTML for dashboards
 - **Authentication** — Bearer tokens, API keys, Basic auth, OAuth2, and custom headers
 - **Filtering** — Run tests by tag, path, method, operationId, or regex
-- **Concurrency Control** — Configurable parallelism with rate limiting
+- **Concurrency Control** — Configurable bounded parallelism
 - **gRPC Reflection** — Auto-discover gRPC services via server reflection
 - **MCP Integration** — Streamable HTTP and stdio MCP transport support
 - **GitHub Actions** — First-class CI integration with annotations and summaries
@@ -108,7 +108,7 @@ jobs:
 - **3 report formats** — JSON for CI, CLI for terminal, HTML for dashboards
 - **Authentication** — Bearer tokens, API keys, Basic auth, OAuth2, and custom headers
 - **Filtering** — Run tests by tag, path, method, operationId, or regex
-- **Concurrency control** — Configurable parallelism with rate limiting
+- **Concurrency control** — Configurable bounded parallelism
 - **gRPC reflection** — Auto-discover gRPC services via server reflection
 - **MCP integration** — Streamable HTTP and stdio MCP transport support
 - **GitHub Actions** — First-class CI integration with annotations and summaries
@@ -235,3 +235,45 @@ import type {
 ## License
 
 MIT © [POWERDUCK LIMITED](https://www.powerduck.com)
+
+## Transport and scenario contract (0.2.13)
+
+Requires Node.js 18.17 or newer. CLI arguments override JSON configuration only
+when explicitly supplied; `openapi-cli --config config.json` accepts `specPath`
+from that file. Concurrency must be an integer from 1–100 and timeout from
+1–600000 milliseconds. Report versions match the installed package.
+
+- HTTP/SSE use the request engine's agents for HTTP(S) CONNECT proxies (including
+  credentials), custom CA, PEM client certificates and PFX. JSON `tls` accepts
+  `caCert`, `clientCert`, `clientKey`, `pfx`, `passphrase`, and `strictSSL`.
+  Custom proxy/client certificates force HTTP/1 to use those agents.
+- WebSocket reads `x-websocket` (legacy `x-ws` is accepted), preserves the endpoint
+  path when overriding the server, and uses `timeout` for opening the connection.
+  The smoke test sends up to three extension messages or one step `values.body`,
+  then collects messages for up to 500 ms.
+- gRPC forwards metadata/authentication and `values.body`, uses `timeout` for
+  unary deadlines and `maxStreamMs` (or timeout) for streaming deadlines, and
+  half-closes client streams before reading their final result. PEM TLS supports
+  encrypted private keys; PFX and HTTPS proxies are rejected. HTTP CONNECT proxy
+  settings are per channel and never change process environment variables.
+  Proto paths disable reflection by default unless explicitly overridden.
+- MCP honors operation transport/command settings unless explicitly overridden.
+  A step body `{ "method": "tools/list", "params": {} }` invokes that method;
+  a plain body supplies `tools/call` arguments. Results retain the `{result}`
+  envelope; tool `isError` responses fail implicit assertions.
+- GraphQL and MCP HTTP currently reject custom proxy/TLS settings because their
+  bundled fetch transport cannot apply them. They never silently ignore these settings.
+- HTTP/SSE forward the request library's complete static auth configuration,
+  including `parameters` for signing schemes. Manual WebSocket/gRPC/MCP sessions
+  support Basic, Bearer and API key auth; query API keys require a URL transport.
+  OAuth token acquisition is owned by the caller; pass a resolved token.
+- Scenario values and variables reach manual sessions as well as HTTP. WebSocket
+  and MCP support `values.query`; gRPC uses `values.header` as metadata.
+  `AbortSignal` cancels the active request and marks the scenario cancelled;
+  sessions and owned agents are closed after completion or failure.
+
+Programmatic hosts can supply `resolveTransport({protocol, url})` to resolve
+per-target `{proxy, tls}` settings, for example system proxies, bypass rules and
+host-specific client certificates. JSON configuration also forwards `requester`
+(`followRedirects`, `maxRedirects`, `disableCookies`, `protocolVersion`) and
+`maxEvents`, `maxStreamMs`, `maxResponseSize` to supported request transports.

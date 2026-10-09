@@ -21,15 +21,34 @@ const program = new Command();
 
 program
   .name("openapi-cli")
-  .description("CI-ready CLI for batch-testing OpenAPI 3.2 documents across HTTP, SSE, WebSocket, GraphQL, gRPC and MCP")
+  .description(
+    "CI-ready CLI for batch-testing OpenAPI 3.2 documents across HTTP, SSE, WebSocket, GraphQL, gRPC and MCP",
+  )
   .version(packageJson.version)
-  .requiredOption("-s, --spec <path-or-url>", "Path or URL (http/https) to OpenAPI 3.2 JSON spec")
+  .option(
+    "-s, --spec <path-or-url>",
+    "Path or URL (http/https) to OpenAPI 3.2 JSON spec",
+  )
   .option("-S, --server <url>", "Override server URL from the spec")
-  .option("-o, --output <dir>", "Output directory for reports", "./openapi-cli-report")
-  .option("-f, --format <formats>", "Comma-separated report formats: json,cli,html", "json,cli,html")
-  .option("-c, --config <path>", "Path to JSON config file (CLI args take precedence)")
+  .option(
+    "-o, --output <dir>",
+    "Output directory for reports",
+    "./openapi-cli-report",
+  )
+  .option(
+    "-f, --format <formats>",
+    "Comma-separated report formats: json,cli,html",
+    "json,cli,html",
+  )
+  .option(
+    "-c, --config <path>",
+    "Path to JSON config file (CLI args take precedence)",
+  )
   .option("--method <methods>", "Filter by HTTP methods (comma-separated)")
-  .option("--path <patterns>", "Filter by path regex patterns (comma-separated)")
+  .option(
+    "--path <patterns>",
+    "Filter by path regex patterns (comma-separated)",
+  )
   .option("--tag <tags>", "Filter by OpenAPI tags (comma-separated)")
   .option("--operation-id <ids>", "Filter by operationId (comma-separated)")
   .option("-n, --concurrency <n>", "Max concurrent requests", "5")
@@ -41,12 +60,22 @@ program
   .option("-k, --insecure", "Skip TLS certificate verification")
   .option("-H, --header <headers...>", "Extra headers (Key: Value, repeatable)")
   .option("--bearer <token>", "Bearer token for Authorization header")
-  .option("-v, --variable <vars...>", "Postman variables (KEY=VALUE, repeatable)")
+  .option(
+    "-v, --variable <vars...>",
+    "Postman variables (KEY=VALUE, repeatable)",
+  )
   .option("--env <path>", "Path to .env file")
   .option("--no-fail-on-error", "Exit 0 even if tests fail")
-  .option("--grpc-no-reflection", "Disable gRPC server reflection (use proto files)")
+  .option(
+    "--grpc-no-reflection",
+    "Disable gRPC server reflection (use proto files)",
+  )
   .option("--grpc-proto <paths...>", "Paths to .proto files or directories")
-  .option("--mcp-transport <transport>", "MCP transport: streamable-http or stdio", "streamable-http")
+  .option(
+    "--mcp-transport <transport>",
+    "MCP transport: streamable-http or stdio",
+    "streamable-http",
+  )
   .option("--mcp-command <command>", "MCP stdio command")
   .option("--mcp-args <args>", "MCP stdio arguments (space or comma separated)")
   .option("--mcp-cwd <dir>", "MCP stdio working directory");
@@ -55,18 +84,24 @@ program.parse(process.argv);
 const opts = program.opts();
 
 async function main() {
+  const supplied = (key: string) =>
+    program.getOptionValueSource(key) === "cli" ? opts[key] : undefined;
   const args: CliArgs = {
     spec: opts.spec,
     server: opts.server,
-    output: opts.output,
-    format: opts.format,
+    output: supplied("output"),
+    format: supplied("format"),
     config: opts.config,
     method: opts.method,
     path: opts.path,
     tag: opts.tag,
     operationId: opts.operationId,
-    concurrency: Number(opts.concurrency),
-    timeout: Number(opts.timeout),
+    concurrency:
+      supplied("concurrency") === undefined
+        ? undefined
+        : Number(opts.concurrency),
+    timeout:
+      supplied("timeout") === undefined ? undefined : Number(opts.timeout),
     proxy: opts.proxy,
     ca: opts.ca,
     cert: opts.cert,
@@ -76,10 +111,12 @@ async function main() {
     bearer: opts.bearer,
     variable: opts.variable,
     env: opts.env,
-    failOnError: process.argv.includes("--no-fail-on-error") ? false : undefined,
+    failOnError: process.argv.includes("--no-fail-on-error")
+      ? false
+      : undefined,
     grpcReflection: opts.grpcNoReflection ? false : undefined,
     grpcProto: opts.grpcProto,
-    mcpTransport: opts.mcpTransport,
+    mcpTransport: supplied("mcpTransport"),
     mcpCommand: opts.mcpCommand,
     mcpArgs: opts.mcpArgs,
     mcpCwd: opts.mcpCwd,
@@ -93,8 +130,12 @@ async function main() {
     process.exit(2);
   }
 
-  console.log(`\x1b[36mopenapi-cli v${packageJson.version} — testing ${config.specPath}\x1b[0m`);
-  console.log(`\x1b[90mServer: ${config.serverUrl ?? "(from spec)"} | Concurrency: ${config.concurrency} | Timeout: ${config.timeout}ms\x1b[0m\n`);
+  console.log(
+    `\x1b[36mopenapi-cli v${packageJson.version} — testing ${config.specPath}\x1b[0m`,
+  );
+  console.log(
+    `\x1b[90mServer: ${config.serverUrl ?? "(from spec)"} | Concurrency: ${config.concurrency} | Timeout: ${config.timeout}ms\x1b[0m\n`,
+  );
 
   let report;
   try {
@@ -111,12 +152,18 @@ async function main() {
   }
 
   if (formats.includes("json")) {
-    const path = generateJsonReport(report, config.outputDir ?? "./openapi-cli-report");
+    const path = generateJsonReport(
+      report,
+      config.outputDir ?? "./openapi-cli-report",
+    );
     console.log(`\x1b[90mJSON report: ${path}\x1b[0m`);
   }
 
   if (formats.includes("html")) {
-    const path = generateHtmlReport(report, config.outputDir ?? "./openapi-cli-report");
+    const path = generateHtmlReport(
+      report,
+      config.outputDir ?? "./openapi-cli-report",
+    );
     console.log(`\x1b[90mHTML report: ${path}\x1b[0m`);
   }
 

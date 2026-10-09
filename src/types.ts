@@ -17,7 +17,21 @@ export type ReportFormat = "json" | "cli" | "html";
 export type TestStatus = "passed" | "failed" | "skipped" | "error";
 
 export interface AuthConfig {
-  type: "bearer" | "basic" | "apikey" | "none";
+  type:
+    | "bearer"
+    | "basic"
+    | "apikey"
+    | "none"
+    | "digest"
+    | "oauth1"
+    | "oauth2"
+    | "jwt"
+    | "hawk"
+    | "aws4"
+    | "ntlm"
+    | "asap"
+    | "edgegrid";
+  parameters?: Record<string, string | number | boolean>;
   token?: string;
   username?: string;
   password?: string;
@@ -35,6 +49,8 @@ export interface TlsConfig {
   clientKey?: string;
   /** Skip TLS certificate verification (insecure). */
   strictSSL?: boolean;
+  pfx?: string;
+  passphrase?: string;
 }
 
 export interface FilterConfig {
@@ -49,6 +65,23 @@ export interface FilterConfig {
 }
 
 export interface CliConfig {
+  /** Programmatic HTTP runtime certificates matched against the resolved URL. */
+  httpRuntime?: {certificates?: unknown; fileResolver?: unknown};
+  signal?: AbortSignal;
+  /** Programmatic per-target transport resolution; never serialized over IPC. */
+  resolveTransport?: (target: {
+    protocol: string;
+    url?: string;
+  }) => Promise<Pick<CliConfig, "proxy" | "tls" | "httpRuntime">>;
+  requester?: {
+    followRedirects?: boolean;
+    maxRedirects?: number;
+    disableCookies?: boolean;
+    protocolVersion?: "http1" | "http2" | "auto";
+  };
+  maxEvents?: number;
+  maxStreamMs?: number;
+  maxResponseSize?: number;
   /** Path to the OpenAPI 3.2 JSON file. */
   specPath: string;
   /** Override the server URL from the spec. */

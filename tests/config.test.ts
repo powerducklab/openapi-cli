@@ -1,10 +1,23 @@
 // Tests for config resolution: CLI args > config file > defaults.
-import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+  beforeEach,
+  afterEach,
+  beforeAll,
+  afterAll,
+} from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { resolveConfig, loadSpec, isRemoteSpec, DEFAULT_CONFIG } from "../src/config.js";
+import {
+  resolveConfig,
+  loadSpec,
+  isRemoteSpec,
+  DEFAULT_CONFIG,
+} from "../src/config.js";
 import type { CliArgs } from "../src/config.js";
 
 let tmpDir: string;
@@ -26,8 +39,8 @@ describe("resolveConfig defaults", () => {
     expect(config.concurrency).toBe(DEFAULT_CONFIG.concurrency);
     expect(config.timeout).toBe(DEFAULT_CONFIG.timeout);
     expect(config.failOnError).toBe(true);
-    expect(config.grpcReflection).toBe(true);
-    expect(config.mcpTransport).toBe("streamable-http");
+    expect(config.grpcReflection).toBeUndefined();
+    expect(config.mcpTransport).toBeUndefined();
   });
 
   it("throws when no spec path is provided", () => {
@@ -76,7 +89,11 @@ describe("resolveConfig CLI args", () => {
   });
 
   it("parses concurrency and timeout as numbers", () => {
-    const config = resolveConfig({ spec: "./o.json", concurrency: 10, timeout: 5000 });
+    const config = resolveConfig({
+      spec: "./o.json",
+      concurrency: 10,
+      timeout: 5000,
+    });
     expect(config.concurrency).toBe(10);
     expect(config.timeout).toBe(5000);
   });
@@ -89,7 +106,10 @@ describe("resolveConfig CLI args", () => {
       mcpArgs: "-y @modelcontextprotocol/server-everything",
     });
     expect(config.mcpCommand).toBe("npx");
-    expect(config.mcpArgs).toEqual(["-y", "@modelcontextprotocol/server-everything"]);
+    expect(config.mcpArgs).toEqual([
+      "-y",
+      "@modelcontextprotocol/server-everything",
+    ]);
   });
 });
 
@@ -118,9 +138,17 @@ describe("resolveConfig file", () => {
     const configPath = path.join(tmpDir, "config.json");
     fs.writeFileSync(
       configPath,
-      JSON.stringify({ specPath: "./file.json", concurrency: 3, timeout: 10000 }),
+      JSON.stringify({
+        specPath: "./file.json",
+        concurrency: 3,
+        timeout: 10000,
+      }),
     );
-    const config = resolveConfig({ config: configPath, concurrency: 8, timeout: 2000 });
+    const config = resolveConfig({
+      config: configPath,
+      concurrency: 8,
+      timeout: 2000,
+    });
     expect(config.concurrency).toBe(8);
     expect(config.timeout).toBe(2000);
     expect(config.specPath).toBe("./file.json");
@@ -155,7 +183,9 @@ describe("resolveConfig file", () => {
   it("throws when config file is invalid JSON", () => {
     const configPath = path.join(tmpDir, "bad.json");
     fs.writeFileSync(configPath, "not json{");
-    expect(() => resolveConfig({ config: configPath })).toThrow(/Invalid config file/);
+    expect(() => resolveConfig({ config: configPath })).toThrow(
+      /Invalid config file/,
+    );
   });
 });
 
@@ -204,7 +234,7 @@ describe("resolveConfig env vars", () => {
 
   it(".env strips surrounding quotes from values", () => {
     const envPath = path.join(tmpDir, ".env3");
-    fs.writeFileSync(envPath, 'QUOTED="hello world"\nSINGLE=\'foo bar\'\n');
+    fs.writeFileSync(envPath, "QUOTED=\"hello world\"\nSINGLE='foo bar'\n");
     const config = resolveConfig({
       spec: "./o.json",
       env: envPath,
@@ -216,7 +246,10 @@ describe("resolveConfig env vars", () => {
 
   it(".env ignores comment lines and blank lines", () => {
     const envPath = path.join(tmpDir, ".env4");
-    fs.writeFileSync(envPath, "# this is a comment\n\nCOMMENT_VAR=visible\n# another comment\n");
+    fs.writeFileSync(
+      envPath,
+      "# this is a comment\n\nCOMMENT_VAR=visible\n# another comment\n",
+    );
     const config = resolveConfig({
       spec: "./o.json",
       env: envPath,
@@ -267,25 +300,32 @@ describe("loadSpec local", () => {
   });
 
   it("throws when spec file does not exist", async () => {
-    await expect(loadSpec({ specPath: "/nonexistent/openapi.json" } as any)).rejects.toThrow(
-      /OpenAPI spec not found/,
-    );
+    await expect(
+      loadSpec({ specPath: "/nonexistent/openapi.json" } as any),
+    ).rejects.toThrow(/OpenAPI spec not found/);
   });
 
   it("throws when spec is invalid JSON", async () => {
     const specPath = path.join(tmpDir, "bad.json");
     fs.writeFileSync(specPath, "not json");
-    await expect(loadSpec({ specPath } as any)).rejects.toThrow(/not valid JSON/);
+    await expect(loadSpec({ specPath } as any)).rejects.toThrow(
+      /not valid JSON/,
+    );
   });
 
   it("throws when spec has no paths", async () => {
     const specPath = path.join(tmpDir, "nopaths.json");
-    fs.writeFileSync(specPath, JSON.stringify({ openapi: "3.2.0", info: { title: "t" } }));
+    fs.writeFileSync(
+      specPath,
+      JSON.stringify({ openapi: "3.2.0", info: { title: "t" } }),
+    );
     await expect(loadSpec({ specPath } as any)).rejects.toThrow(/paths/);
   });
 
   it("throws when spec path is a directory", async () => {
-    await expect(loadSpec({ specPath: tmpDir } as any)).rejects.toThrow(/not a file/);
+    await expect(loadSpec({ specPath: tmpDir } as any)).rejects.toThrow(
+      /not a file/,
+    );
   });
 });
 
@@ -354,31 +394,46 @@ describe("loadSpec remote", () => {
 
   it("throws on too many redirects", async () => {
     await expect(
-      loadSpec({ specPath: `http://127.0.0.1:${port}/loop`, timeout: 5000 } as any),
+      loadSpec({
+        specPath: `http://127.0.0.1:${port}/loop`,
+        timeout: 5000,
+      } as any),
     ).rejects.toThrow(/Too many redirects/);
   });
 
   it("throws on HTTP 404", async () => {
     await expect(
-      loadSpec({ specPath: `http://127.0.0.1:${port}/missing`, timeout: 5000 } as any),
+      loadSpec({
+        specPath: `http://127.0.0.1:${port}/missing`,
+        timeout: 5000,
+      } as any),
     ).rejects.toThrow(/HTTP 404/);
   });
 
   it("throws on invalid JSON from remote", async () => {
     await expect(
-      loadSpec({ specPath: `http://127.0.0.1:${port}/bad.json`, timeout: 5000 } as any),
+      loadSpec({
+        specPath: `http://127.0.0.1:${port}/bad.json`,
+        timeout: 5000,
+      } as any),
     ).rejects.toThrow(/not valid JSON/);
   });
 
   it("throws when remote spec has no paths", async () => {
     await expect(
-      loadSpec({ specPath: `http://127.0.0.1:${port}/nopaths.json`, timeout: 5000 } as any),
+      loadSpec({
+        specPath: `http://127.0.0.1:${port}/nopaths.json`,
+        timeout: 5000,
+      } as any),
     ).rejects.toThrow(/paths/);
   });
 
   it("throws on fetch timeout", async () => {
     await expect(
-      loadSpec({ specPath: `http://127.0.0.1:${port}/slow`, timeout: 500 } as any),
+      loadSpec({
+        specPath: `http://127.0.0.1:${port}/slow`,
+        timeout: 500,
+      } as any),
     ).rejects.toThrow(/Timed out|ECONNRESET|socket/);
   });
 });

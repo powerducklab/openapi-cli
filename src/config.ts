@@ -12,7 +12,13 @@ import type { CliConfig } from "./types.js";
 export const DEFAULT_CONFIG: Required<
   Pick<
     CliConfig,
-    "outputDir" | "formats" | "concurrency" | "timeout" | "failOnError" | "grpcReflection" | "mcpTransport"
+    | "outputDir"
+    | "formats"
+    | "concurrency"
+    | "timeout"
+    | "failOnError"
+    | "grpcReflection"
+    | "mcpTransport"
   >
 > = {
   outputDir: "./openapi-cli-report",
@@ -58,6 +64,25 @@ export interface CliArgs {
  * Resolve the final CliConfig from CLI args, an optional config file,
  * environment variables, and defaults.
  */
+export function validateRunConfig(config: CliConfig): void {
+  for (const [key, value, max] of [
+    ["concurrency", config.concurrency ?? 5, 100],
+    ["timeout", config.timeout ?? 30000, 600000],
+  ] as const) {
+    if (!Number.isInteger(value) || value < 1 || value > max)
+      throw new Error(`${key} must be an integer between 1 and ${max}.`);
+  }
+  if (
+    config.formats?.some((format) => !["json", "cli", "html"].includes(format))
+  )
+    throw new Error("Unsupported report format.");
+  if (
+    config.mcpTransport &&
+    !["stdio", "streamable-http"].includes(config.mcpTransport)
+  )
+    throw new Error("Unsupported MCP transport.");
+}
+
 export function resolveConfig(args: CliArgs): CliConfig {
   const fileConfig = args.config ? loadConfigFile(args.config) : {};
 
@@ -67,25 +92,40 @@ export function resolveConfig(args: CliArgs): CliConfig {
     outputDir: args.output ?? fileConfig.outputDir ?? DEFAULT_CONFIG.outputDir,
     formats: parseFormats(args.format ?? fileConfig.formats),
     filter: resolveFilter(args, fileConfig),
-    concurrency: args.concurrency ?? fileConfig.concurrency ?? DEFAULT_CONFIG.concurrency,
+    concurrency:
+      args.concurrency ?? fileConfig.concurrency ?? DEFAULT_CONFIG.concurrency,
     timeout: args.timeout ?? fileConfig.timeout ?? DEFAULT_CONFIG.timeout,
     proxy: args.proxy ?? fileConfig.proxy,
     tls: {
       caCert: args.ca ?? fileConfig.tls?.caCert,
       clientCert: args.cert ?? fileConfig.tls?.clientCert,
       clientKey: args.key ?? fileConfig.tls?.clientKey,
-      strictSSL: args.insecure !== undefined ? !args.insecure : fileConfig.tls?.strictSSL,
+      pfx: fileConfig.tls?.pfx,
+      passphrase: fileConfig.tls?.passphrase,
+      strictSSL:
+        args.insecure !== undefined
+          ? !args.insecure
+          : fileConfig.tls?.strictSSL,
     },
+    requester: fileConfig.requester,
+    maxEvents: fileConfig.maxEvents,
+    maxStreamMs: fileConfig.maxStreamMs,
+    maxResponseSize: fileConfig.maxResponseSize,
     headers: mergeHeaders(args.header, fileConfig.headers),
     auth: resolveAuth(args, fileConfig),
     variables: mergeVariables(args.variable, fileConfig.variables),
-    failOnError: args.failOnError ?? fileConfig.failOnError ?? DEFAULT_CONFIG.failOnError,
+    failOnError:
+      args.failOnError ?? fileConfig.failOnError ?? DEFAULT_CONFIG.failOnError,
     envFile: args.env ?? fileConfig.envFile,
-    grpcReflection: args.grpcReflection ?? fileConfig.grpcReflection ?? DEFAULT_CONFIG.grpcReflection,
+    grpcReflection: args.grpcReflection ?? fileConfig.grpcReflection,
     grpcProtoPaths: args.grpcProto ?? fileConfig.grpcProtoPaths,
-    mcpTransport: (args.mcpTransport as CliConfig["mcpTransport"]) ?? fileConfig.mcpTransport ?? DEFAULT_CONFIG.mcpTransport,
+    mcpTransport:
+      (args.mcpTransport as CliConfig["mcpTransport"]) ??
+      fileConfig.mcpTransport,
     mcpCommand: args.mcpCommand ?? fileConfig.mcpCommand,
-    mcpArgs: args.mcpArgs ? args.mcpArgs.split(/[\s,]+/).filter(Boolean) : fileConfig.mcpArgs,
+    mcpArgs: args.mcpArgs
+      ? args.mcpArgs.split(/[\s,]+/).filter(Boolean)
+      : fileConfig.mcpArgs,
     mcpCwd: args.mcpCwd ?? fileConfig.mcpCwd,
   };
 
@@ -97,7 +137,9 @@ export function resolveConfig(args: CliArgs): CliConfig {
   expandEnvVars(config);
 
   if (!config.specPath) {
-    throw new Error("No OpenAPI spec path provided. Use --spec <path> or set specPath in config.");
+    throw new Error(
+      "No OpenAPI spec path provided. Use --spec <path> or set specPath in config.",
+    );
   }
 
   if (config.proxy) {
@@ -108,6 +150,7 @@ export function resolveConfig(args: CliArgs): CliConfig {
     }
   }
 
+  validateRunConfig(config);
   return config;
 }
 
@@ -118,26 +161,41 @@ function loadConfigFile(configPath: string): Partial<CliConfig> {
   }
   const raw = fs.readFileSync(resolved, "utf-8");
   try {
-    return JSON.parse(raw) as Partial<CliConfig>;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("Config must be an object.");
+    return parsed as Partial<CliConfig>;
   } catch (e) {
-    throw new Error(`Invalid config file (must be JSON): ${(e as Error).message}`);
+    throw new Error(
+      `Invalid config file (must be JSON): ${(e as Error).message}`,
+    );
   }
 }
 
 function parseFormats(raw: unknown): CliConfig["formats"] {
   if (Array.isArray(raw)) return raw as CliConfig["formats"];
   if (typeof raw === "string") {
-    return raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) as CliConfig["formats"];
+    return raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean) as CliConfig["formats"];
   }
   return DEFAULT_CONFIG.formats;
 }
 
-function resolveFilter(args: CliArgs, file: Partial<CliConfig>): CliConfig["filter"] {
+function resolveFilter(
+  args: CliArgs,
+  file: Partial<CliConfig>,
+): CliConfig["filter"] {
   const methods = args.method
     ? args.method.split(",").map((s) => s.trim().toLowerCase())
     : file.filter?.methods;
-  const paths = args.path ? args.path.split(",").map((s) => s.trim()) : file.filter?.paths;
-  const tags = args.tag ? args.tag.split(",").map((s) => s.trim()) : file.filter?.tags;
+  const paths = args.path
+    ? args.path.split(",").map((s) => s.trim())
+    : file.filter?.paths;
+  const tags = args.tag
+    ? args.tag.split(",").map((s) => s.trim())
+    : file.filter?.tags;
   const operationIds = args.operationId
     ? args.operationId.split(",").map((s) => s.trim())
     : file.filter?.operationIds;
@@ -161,7 +219,10 @@ function mergeHeaders(
   return Object.keys(out).length ? out : undefined;
 }
 
-function resolveAuth(args: CliArgs, file: Partial<CliConfig>): CliConfig["auth"] {
+function resolveAuth(
+  args: CliArgs,
+  file: Partial<CliConfig>,
+): CliConfig["auth"] {
   if (args.bearer) {
     return { type: "bearer", token: args.bearer };
   }
@@ -192,7 +253,10 @@ function loadEnvFile(envPath: string, config: CliConfig): void {
     const idx = trimmed.indexOf("=");
     if (idx > 0) {
       const key = trimmed.slice(0, idx).trim();
-      const value = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
+      const value = trimmed
+        .slice(idx + 1)
+        .trim()
+        .replace(/^["']|["']$/g, "");
       if (!(key in process.env)) {
         process.env[key] = value;
       }
@@ -245,14 +309,26 @@ function fetchRemoteSpec(url: string, timeoutMs: number): Promise<string> {
         target,
         {
           timeout: timeoutMs,
-          headers: { Accept: "application/json, text/plain, */*", "User-Agent": "@powerduck/openapi-cli" },
+          headers: {
+            Accept: "application/json, text/plain, */*",
+            "User-Agent": "@powerduck/openapi-cli",
+          },
         },
         (res) => {
           // Handle redirects.
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          if (
+            res.statusCode &&
+            res.statusCode >= 300 &&
+            res.statusCode < 400 &&
+            res.headers.location
+          ) {
             if (++redirects > maxRedirects) {
               res.resume();
-              reject(new Error(`Too many redirects (>${maxRedirects}) while fetching spec: ${url}`));
+              reject(
+                new Error(
+                  `Too many redirects (>${maxRedirects}) while fetching spec: ${url}`,
+                ),
+              );
               return;
             }
             const next = new URL(res.headers.location, target).toString();
@@ -262,19 +338,31 @@ function fetchRemoteSpec(url: string, timeoutMs: number): Promise<string> {
           }
           if (res.statusCode !== 200) {
             res.resume();
-            reject(new Error(`Failed to fetch spec from ${target}: HTTP ${res.statusCode} ${res.statusMessage ?? ""}`.trim()));
+            reject(
+              new Error(
+                `Failed to fetch spec from ${target}: HTTP ${res.statusCode} ${res.statusMessage ?? ""}`.trim(),
+              ),
+            );
             return;
           }
           const chunks: Buffer[] = [];
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-          res.on("error", (e) => reject(new Error(`Error reading spec response: ${e.message}`)));
+          res.on("error", (e) =>
+            reject(new Error(`Error reading spec response: ${e.message}`)),
+          );
         },
       );
       req.on("timeout", () => {
-        req.destroy(new Error(`Timed out after ${timeoutMs}ms while fetching spec: ${url}`));
+        req.destroy(
+          new Error(
+            `Timed out after ${timeoutMs}ms while fetching spec: ${url}`,
+          ),
+        );
       });
-      req.on("error", (e) => reject(new Error(`Network error fetching spec ${url}: ${e.message}`)));
+      req.on("error", (e) =>
+        reject(new Error(`Network error fetching spec ${url}: ${e.message}`)),
+      );
     };
     fetch(url);
   });
@@ -288,13 +376,17 @@ function parseSpec(raw: string, source: string): any {
   try {
     spec = JSON.parse(raw);
   } catch (e) {
-    throw new Error(`Spec from ${source} is not valid JSON: ${(e as Error).message}`);
+    throw new Error(
+      `Spec from ${source} is not valid JSON: ${(e as Error).message}`,
+    );
   }
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
     throw new Error(`Spec from ${source} is not a JSON object`);
   }
   if (!spec.paths || typeof spec.paths !== "object") {
-    throw new Error(`Spec from ${source} does not contain a valid 'paths' object`);
+    throw new Error(
+      `Spec from ${source} does not contain a valid 'paths' object`,
+    );
   }
   return spec;
 }
@@ -327,7 +419,10 @@ export async function loadSpec(config: CliConfig): Promise<any> {
 
   let raw: string;
   if (isRemoteSpec(source)) {
-    raw = await fetchRemoteSpec(source, config.timeout ?? DEFAULT_CONFIG.timeout);
+    raw = await fetchRemoteSpec(
+      source,
+      config.timeout ?? DEFAULT_CONFIG.timeout,
+    );
   } else {
     const resolved = path.resolve(source);
     if (!fs.existsSync(resolved)) {

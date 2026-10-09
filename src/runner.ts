@@ -5,9 +5,24 @@
  * MCP (one-shot), and WebSocket (connect-send-close).
  */
 import { createClient } from "@powerduck/openapi-request";
-import fs from "node:fs";
-import type { CliConfig, TestReport, TestResult, TestSummary } from "./types.js";
-import { loadSpec } from "./config.js";
+import packageJson from "../package.json";
+import {
+  transportAgents,
+  tlsOptions,
+  grpcTransport,
+  grpcPrivateKey,
+  queryUrl,
+  rejectUnsupportedTransport,
+  resolveValue,
+  sessionAuth,
+} from "./transport.js";
+import type {
+  CliConfig,
+  TestReport,
+  TestResult,
+  TestSummary,
+} from "./types.js";
+import { loadSpec, validateRunConfig } from "./config.js";
 import {
   extractAssertions,
   extractPostmanScripts,
@@ -15,7 +30,7 @@ import {
   type DeclarativeAssertion,
 } from "./assertions.js";
 
-const VERSION = "0.1.0";
+const VERSION = packageJson.version;
 
 export interface OperationInfo {
   path: string;
@@ -67,31 +82,43 @@ export function buildImplicitAssertions(
     });
   } else if (protocol === "graphql") {
     const status = response?.status;
-    const statusOk = typeof status === "number" && status >= 200 && status < 300;
+    const statusOk =
+      typeof status === "number" && status >= 200 && status < 300;
     const body = response?.body as any;
-    const hasGraphQLErrors = Array.isArray(body?.errors) && body.errors.length > 0;
+    const hasGraphQLErrors =
+      Array.isArray(body?.errors) && body.errors.length > 0;
     const ok = statusOk && !hasGraphQLErrors;
     let error: string | undefined;
     if (!statusOk) error = `expected HTTP 2xx, got ${status ?? "no status"}`;
-    else if (hasGraphQLErrors) error = `GraphQL response contains ${body.errors.length} error(s)`;
+    else if (hasGraphQLErrors)
+      error = `GraphQL response contains ${body.errors.length} error(s)`;
     out.push({
       name: "GraphQL success (implicit)",
       passed: ok,
       error,
     });
   } else if (protocol === "grpc") {
-    const code = (response as any)?.statusCode ?? (response as any)?.code;
-    const statusName = (response as any)?.statusName ?? (response as any)?.status;
+    const code =
+      (response as any)?.statusCode ??
+      (response as any)?.code ??
+      response?.status;
+    const statusName =
+      (response as any)?.statusName ?? (response as any)?.status;
     const ok = code === 0;
     out.push({
       name: "gRPC status is OK (implicit)",
       passed: ok,
-      error: ok ? undefined : `expected code 0 (OK), got ${code ?? "unknown"}${statusName ? ` (${statusName})` : ""}`,
+      error: ok
+        ? undefined
+        : `expected code 0 (OK), got ${code ?? "unknown"}${statusName ? ` (${statusName})` : ""}`,
     });
   } else if (protocol === "mcp") {
     const body = (response as any)?.body ?? {};
     const hasResult = body.result !== undefined;
-    const hasError = body.error !== undefined || (response as any)?.error !== undefined;
+    const hasError =
+      body.error !== undefined ||
+      body.result?.isError === true ||
+      (response as any)?.error !== undefined;
     const ok = hasResult && !hasError;
     let error: string | undefined;
     if (hasError) error = "MCP JSON-RPC response contains an error";
@@ -103,13 +130,21 @@ export function buildImplicitAssertions(
     });
   } else if (protocol === "websocket") {
     const events = (response as any)?.events ?? [];
-    const opened = events.some((e: any) => e.kind === "open" || e.state === "open");
-    const hasError = events.some((e: any) => e.kind === "error" || e.state === "error");
+    const opened = events.some(
+      (e: any) => e.kind === "open" || e.state === "open",
+    );
+    const hasError = events.some(
+      (e: any) => e.kind === "error" || e.state === "error",
+    );
     const ok = opened && !hasError;
     out.push({
       name: "WebSocket connected (implicit)",
       passed: ok,
-      error: ok ? undefined : hasError ? "WebSocket connection errored" : "WebSocket did not reach open state",
+      error: ok
+        ? undefined
+        : hasError
+          ? "WebSocket connection errored"
+          : "WebSocket did not reach open state",
     });
   }
 
@@ -120,6 +155,7 @@ export function buildImplicitAssertions(
  * Run all tests defined in the spec.
  */
 export async function runTests(config: CliConfig): Promise<TestReport> {
+  validateRunConfig(config);
   const spec = await loadSpec(config);
   const client = createClient();
   const operations = collectOperations(spec, config);
@@ -128,15 +164,16 @@ export async function runTests(config: CliConfig): Promise<TestReport> {
   const results: TestResult[] = [];
 
   // Execute with bounded concurrency.
-  const queue = [...operations];
-  const workers = Math.min(config.concurrency ?? 5, queue.length);
+  let cursor = 0;
+  const workers = Math.min(config.concurrency ?? 5, operations.length);
   const workerFns: Promise<void>[] = [];
 
   for (let i = 0; i < workers; i++) {
     workerFns.push(
       (async () => {
-        while (queue.length > 0) {
-          const op = queue.shift();
+        while (cursor < operations.length) {
+          if (config.signal?.aborted) throw new Error("Run cancelled.");
+          const op = operations[cursor++];
           if (!op) break;
           const result = await executeOperation(client, op, config, spec);
           results.push(result);
@@ -151,18 +188,25 @@ export async function runTests(config: CliConfig): Promise<TestReport> {
 
   return {
     summary,
-    results: results.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method)),
+    results: results.sort(
+      (a, b) =>
+        a.path.localeCompare(b.path) || a.method.localeCompare(b.method),
+    ),
     config,
     generatedAt: new Date().toISOString(),
     version: VERSION,
   };
 }
 
-export function collectOperations(spec: any, config: CliConfig): OperationInfo[] {
+export function collectOperations(
+  spec: any,
+  config: CliConfig,
+): OperationInfo[] {
   const ops: OperationInfo[] = [];
   const methods = ["get", "post", "put", "delete", "patch", "head", "options"];
 
   for (const [path, pathItemRaw] of Object.entries(spec.paths ?? {})) {
+    if (!pathItemRaw || typeof pathItemRaw !== "object") continue;
     const pathItem = pathItemRaw as Record<string, any>;
     for (const method of methods) {
       const operation = pathItem[method];
@@ -200,10 +244,21 @@ function inferProtocol(operation: any, pathItem: any): string {
   return "http";
 }
 
-function matchesFilter(op: OperationInfo, filter?: CliConfig["filter"]): boolean {
+function matchesFilter(
+  op: OperationInfo,
+  filter?: CliConfig["filter"],
+): boolean {
   if (!filter) return true;
-  if (filter.methods?.length && !filter.methods.includes(op.method.toLowerCase())) return false;
-  if (filter.operationIds?.length && !filter.operationIds.includes(op.operationId)) return false;
+  if (
+    filter.methods?.length &&
+    !filter.methods.includes(op.method.toLowerCase())
+  )
+    return false;
+  if (
+    filter.operationIds?.length &&
+    !filter.operationIds.includes(op.operationId)
+  )
+    return false;
   if (filter.tags?.length) {
     const opTags = (op.operation.tags ?? []) as string[];
     if (!filter.tags.some((t) => opTags.includes(t))) return false;
@@ -222,6 +277,7 @@ function matchesFilter(op: OperationInfo, filter?: CliConfig["filter"]): boolean
 }
 
 export interface StepExecutionOptions {
+  signal?: AbortSignal;
   config: CliConfig;
   spec: any;
   /** Active variable scope injected as {{name}} values. */
@@ -267,7 +323,8 @@ export async function executeStep(
   op: OperationInfo,
   options: StepExecutionOptions,
 ): Promise<StepExecution> {
-  const { config, spec } = options;
+  let { config } = options;
+  const { spec } = options;
   const startedAt = Date.now();
   const base: Omit<TestResult, "status" | "durationMs" | "timestamp"> = {
     operationId: op.operationId,
@@ -277,6 +334,63 @@ export async function executeStep(
   };
 
   try {
+    if ((options.signal || config.signal)?.aborted)
+      throw new Error("Run cancelled.");
+    const vars = options.variables || config.variables;
+    const extension =
+      op.operation["x-websocket"] ||
+      op.operation["x-ws"] ||
+      op.operation["x-grpc"] ||
+      op.operation["x-mcp"] ||
+      {};
+    const url = resolveValue(
+      options.serverUrl ??
+        config.serverUrl ??
+        extension.url ??
+        extension.address ??
+        extension.endpoint ??
+        spec.servers?.[0]?.url,
+      vars,
+    );
+    if (config.resolveTransport)
+      config = {
+        ...config,
+        ...(await config.resolveTransport({ protocol: op.protocol, url })),
+      };
+    const manual = ["grpc", "websocket", "mcp"].includes(op.protocol);
+    const sessionConfig = {
+      ...config,
+      serverUrl: resolveValue(config.serverUrl, vars),
+      auth: manual ? resolveValue(config.auth, vars) : config.auth,
+      headers: manual
+        ? resolveValue({ ...config.headers, ...options.values?.header }, vars)
+        : config.headers,
+      signal: options.signal || config.signal,
+    };
+    const sessionOp = {
+      ...op,
+      operation: manual
+        ? {
+            ...op.operation,
+            ...Object.fromEntries(
+              Object.entries(op.operation)
+                .filter(([key]) =>
+                  ["x-grpc", "x-mcp", "x-ws", "x-websocket"].includes(key),
+                )
+                .map(([key, value]) => [key, resolveValue(value, vars)]),
+            ),
+          }
+        : op.operation,
+    };
+    const sessionValues = manual
+      ? resolveValue(options.values, vars)
+      : options.values;
+    if (
+      !["http", "sse", "graphql", "grpc", "websocket", "mcp"].includes(
+        op.protocol,
+      )
+    )
+      throw new Error(`Unsupported protocol: ${op.protocol}`);
     const specAssertions = extractAssertions(op.operation, op.pathItem);
     const assertions = [...specAssertions, ...(options.extraAssertions ?? [])];
     const postmanTest = extractPostmanScripts(op.operation);
@@ -288,19 +402,37 @@ export async function executeStep(
 
     switch (op.protocol) {
       case "grpc": {
-        const grpc = await executeGrpc(client, op, config, options.serverUrl);
+        const grpc = await executeGrpc(
+          client,
+          sessionOp,
+          sessionConfig,
+          resolveValue(options.serverUrl, vars),
+          sessionValues,
+        );
         responseData = grpc.response;
         requestSnapshot = grpc.request;
         break;
       }
       case "websocket": {
-        const ws = await executeWebSocket(client, op, config, options.serverUrl);
+        const ws = await executeWebSocket(
+          client,
+          sessionOp,
+          sessionConfig,
+          resolveValue(options.serverUrl, vars),
+          sessionValues,
+        );
         responseData = ws.response;
         requestSnapshot = ws.request;
         break;
       }
       case "mcp": {
-        const mcp = await executeMcp(client, op, config, options.serverUrl);
+        const mcp = await executeMcp(
+          client,
+          sessionOp,
+          sessionConfig,
+          resolveValue(options.serverUrl, vars),
+          sessionValues,
+        );
         responseData = mcp.response;
         requestSnapshot = mcp.request;
         break;
@@ -315,6 +447,7 @@ export async function executeStep(
           variables: options.variables,
           values: options.values,
           serverUrl: options.serverUrl,
+          signal: options.signal || config.signal,
         });
         responseData = http.response;
         requestSnapshot = http.request;
@@ -323,11 +456,14 @@ export async function executeStep(
       }
     }
 
+    if ((options.signal || config.signal)?.aborted)
+      throw new Error("Run cancelled.");
     const durationMs = Date.now() - startedAt;
 
     // If the operation defines no assertions, add an implicit status check
     // so that 4xx/5xx responses are not silently marked as passed.
-    const hasUserAssertions = assertions.length > 0 || postmanAssertions.length > 0;
+    const hasUserAssertions =
+      assertions.length > 0 || postmanAssertions.length > 0;
     const implicitAssertions = !hasUserAssertions
       ? buildImplicitAssertions(op.protocol, responseData)
       : [];
@@ -352,7 +488,11 @@ export async function executeStep(
       return true;
     });
 
-    const allAssertions = [...declResults, ...dedupedPostman, ...implicitAssertions];
+    const allAssertions = [
+      ...declResults,
+      ...dedupedPostman,
+      ...implicitAssertions,
+    ];
     const hasFailures = allAssertions.some((a) => !a.passed);
 
     const result: TestResult = {
@@ -399,6 +539,7 @@ export async function executeStep(
 }
 
 interface HttpStepContext {
+  signal?: AbortSignal;
   postmanTest: string | undefined;
   postmanAssertions: any[];
   variables?: Record<string, string>;
@@ -417,34 +558,32 @@ async function executeHttp(
   request: TestResult["request"];
   env: Record<string, string>;
 }> {
-  const runnerOptions: any = {};
-  if (config.proxy) {
-    try {
-      const proxyUrl = new URL(config.proxy);
-      runnerOptions.proxies = [{
-        match: "*://*/*",
-        host: proxyUrl.hostname,
-        port: proxyUrl.port ? Number(proxyUrl.port) : (proxyUrl.protocol === "https:" ? 443 : 80),
-        tunnel: true,
-      }];
-    } catch {
-      throw new Error(`Invalid proxy URL: ${config.proxy}`);
-    }
-  }
-
-  // TLS / certificate options passed through to the underlying requester.
-  const tls = config.tls;
-  if (tls) {
-    const requester: any = { ...(runnerOptions.requester ?? {}) };
-    if (tls.strictSSL === false) requester.strictSSL = false;
-    if (tls.caCert) requester.ca = fs.readFileSync(tls.caCert);
-    if (tls.clientCert) requester.cert = fs.readFileSync(tls.clientCert);
-    if (tls.clientKey) requester.key = fs.readFileSync(tls.clientKey);
-    if (Object.keys(requester).length) runnerOptions.requester = requester;
-  }
-
+  if (op.protocol === "graphql") rejectUnsupportedTransport(config, "GraphQL");
+  const agents =
+    op.protocol === "graphql" ? undefined : transportAgents(config);
+  const runnerOptions: any = {
+    ...config.httpRuntime,
+    requester: {
+      ...config.requester,
+      strictSSL: config.tls?.strictSSL !== false,
+      ignoreProxyEnvironmentVariables: true,
+      ...(agents
+        ? {
+            agents,
+            ...(config.proxy ||
+            config.tls?.caCert ||
+            config.tls?.clientCert ||
+            config.tls?.pfx || config.httpRuntime?.certificates
+              ? { protocolVersion: "http1" }
+              : {}),
+          }
+        : {}),
+    },
+  };
   // Per-step values override sampled defaults; global headers merge underneath.
-  const stepValues = ctx.values as { header?: Record<string, unknown> } | undefined;
+  const stepValues = ctx.values as
+    | { header?: Record<string, unknown> }
+    | undefined;
   const mergedHeader: Record<string, unknown> = {
     ...(config.headers ?? {}),
     ...(stepValues?.header ?? {}),
@@ -455,28 +594,39 @@ async function executeHttp(
     ...(Object.keys(mergedHeader).length ? { header: mergedHeader } : {}),
   };
 
-  const result = await client.send({
-    spec,
-    target: { path: op.path, method: op.method },
-    serverUrl: ctx.serverUrl ?? config.serverUrl,
-    values: Object.keys(values).length ? values : undefined,
-    auth: config.auth,
-    variables: ctx.variables,
-    timeout: config.timeout,
-    runner: Object.keys(runnerOptions).length ? runnerOptions : undefined,
-    scripts: ctx.postmanTest
-      ? { test: { exec: ctx.postmanTest }, fromSpecExtensions: false }
-      : undefined,
-    onAssertion: (a: any) => {
-      ctx.postmanAssertions.push({
-        name: a.name ?? "assertion",
-        passed: a.passed,
-        error: formatAssertionError(a.error),
-      });
-    },
-    maxStreamMs: config.timeout,
-    maxEvents: 50,
-  });
+  let result;
+  try {
+    result = await client.send({
+      writeBack: false,
+      signal: ctx.signal,
+      spec,
+      target: { path: op.path, method: op.method },
+      serverUrl: ctx.serverUrl ?? config.serverUrl,
+      values: Object.keys(values).length ? values : undefined,
+      auth: config.auth,
+      variables: ctx.variables,
+      timeout: config.timeout,
+      runner: Object.keys(runnerOptions).length ? runnerOptions : undefined,
+      scripts: ctx.postmanTest
+        ? { test: { exec: ctx.postmanTest }, fromSpecExtensions: false }
+        : undefined,
+      onAssertion: (a: any) => {
+        ctx.postmanAssertions.push({
+          name: a.name ?? "assertion",
+          passed: a.passed,
+          error: formatAssertionError(a.error),
+        });
+      },
+      maxStreamMs: config.maxStreamMs ?? config.timeout,
+      maxEvents: config.maxEvents ?? 50,
+      maxResponseSize: config.maxResponseSize,
+    });
+  } finally {
+    for (const agent of new Set<any>(Object.values(agents || {})))
+      agent.destroy();
+  }
+  if (ctx.signal?.aborted) throw new Error("Run cancelled.");
+  if (result.error) throw new Error(result.error.message);
 
   // Merge the full variable-scope snapshots produced by pre-request and test
   // scripts so the scenario engine can chain values across ordered steps.
@@ -488,7 +638,10 @@ async function executeHttp(
       }
     | undefined;
   if (scriptReport) {
-    for (const outcome of [...(scriptReport.prerequest ?? []), ...(scriptReport.test ?? [])]) {
+    for (const outcome of [
+      ...(scriptReport.prerequest ?? []),
+      ...(scriptReport.test ?? []),
+    ]) {
       if (outcome.environment) Object.assign(env, outcome.environment);
     }
   }
@@ -523,60 +676,123 @@ async function executeGrpc(
   op: OperationInfo,
   config: CliConfig,
   serverUrl?: string,
-): Promise<{ response: TestResult["response"]; request: TestResult["request"] }> {
+  values?: any,
+): Promise<{
+  response: TestResult["response"];
+  request: TestResult["request"];
+}> {
   const xGrpc = op.operation["x-grpc"] ?? {};
-  const address = xGrpc.address ?? (serverUrl ?? config.serverUrl)?.replace(/^https?:\/\//, "");
-  if (!address) throw new Error("gRPC operation requires x-grpc.address or --server");
+  const address = (serverUrl ?? config.serverUrl ?? xGrpc.address)?.replace(
+    /^https?:\/\//,
+    "",
+  );
+  if (!address)
+    throw new Error("gRPC operation requires x-grpc.address or --server");
 
+  const headers = { ...config.headers };
+  sessionAuth(config, headers);
+  const material = tlsOptions(config);
+  if (material.pfx) throw new Error("gRPC requires PEM certificates, not PFX.");
   const session = client.connect({
     kind: "grpc",
-    address,
+    deadlineMs: config.timeout ?? 30000,
+    streamDeadlineMs: config.maxStreamMs ?? config.timeout ?? 30000,
+    ...grpcTransport(config, address),
+    tls:
+      xGrpc.tls === true || /^https:/.test(serverUrl ?? config.serverUrl ?? "")
+        ? {
+            rootCerts: material.ca,
+            privateKey: grpcPrivateKey(material),
+            certChain: material.cert,
+            rejectUnauthorized: material.rejectUnauthorized,
+          }
+        : false,
     service: xGrpc.service,
     method: xGrpc.method ?? op.operationId,
-    reflection: config.grpcReflection,
-    protoPaths: config.grpcProtoPaths,
-    metadata: config.headers,
+    reflection:
+      config.grpcReflection ??
+      xGrpc.reflection ??
+      !(config.grpcProtoPaths ?? xGrpc.protoPaths)?.length,
+    protoPaths: config.grpcProtoPaths ?? xGrpc.protoPaths,
+    includeDirs: xGrpc.includeDirs,
+    metadata: headers,
   });
 
-  await session.open();
-  const kind = (session as any).kind as string;
-
-  // Send a sample or empty message.
-  const sample = buildGrpcSample(op.operation);
-  if (kind === "unary" || kind === "server_streaming") {
-    await session.send(sample);
-  } else {
-    // client / bidi: send one message then finish.
-    await session.send(sample);
-    await session.close();
-  }
-
-  const events = (session as any).events ?? [];
-  const statusEvent = events.find((e: any) => e.kind === "status");
-  // gRPC events use "inbound"/"outbound" (not "in"/"out").
-  const dataEvents = events.filter((e: any) => e.kind === "data" && e.direction === "inbound");
-
-  if (kind === "unary" || kind === "server_streaming") {
-    await session.close();
-  }
-
-  const response: TestResult["response"] = {
-    status: statusEvent?.meta?.code ?? 0,
-    statusText: statusEvent?.meta?.statusName,
-    body: dataEvents.length === 1 ? dataEvents[0].data : dataEvents.map((e: any) => e.data),
-    events: events.map((e: any) => ({ kind: e.kind, direction: e.direction, data: e.data, meta: e.meta })),
+  const onAbort = () => {
+    void session.close().catch(() => {});
   };
-  const grpcMethod = xGrpc.method ?? op.operationId;
-  return {
-    response,
-    request: {
-      method: grpcMethod,
-      target: xGrpc.service ? `${xGrpc.service}/${grpcMethod}` : grpcMethod,
-      url: address,
-      ...(Object.keys(sample).length ? { body: sample } : {}),
-      ...(config.headers ? { headers: config.headers } : {}),
-    },
-  };
+  config.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    if (config.signal?.aborted) throw new Error("Run cancelled.");
+    await session.open();
+    if (config.signal?.aborted) throw new Error("Run cancelled.");
+    const kind = (session as any).kind as string;
+
+    // Send a sample or empty message.
+    const sample = values?.body ?? buildGrpcSample(op.operation);
+    if (kind === "unary" || kind === "server_streaming") {
+      await session.send(sample);
+    } else {
+      // client / bidi: send one message then finish.
+      await session.send(sample);
+      await (session as any).finishSending();
+    }
+
+    const events = (session as any).events ?? [];
+    const statusEvent = events.find((e: any) => e.kind === "status");
+    // The public session DTO normalizes directions to "in" / "out".
+    const dataEvents = events.filter(
+      (e: any) => e.kind === "data" && e.direction === "in",
+    );
+
+    if (kind === "unary" || kind === "server_streaming") {
+      await session.close();
+    }
+
+    const response: TestResult["response"] = {
+      status: statusEvent?.meta?.code ?? -1,
+      statusText: statusEvent?.meta?.statusName,
+      body:
+        dataEvents.length === 1
+          ? dataEvents[0].data
+          : dataEvents.map((e: any) => e.data),
+      events: events.map((e: any) => ({
+        kind: e.kind,
+        direction: e.direction,
+        data: e.data,
+        meta: e.meta,
+      })),
+    };
+    const grpcMethod = xGrpc.method ?? op.operationId;
+    return {
+      response,
+      request: {
+        method: grpcMethod,
+        target: xGrpc.service ? `${xGrpc.service}/${grpcMethod}` : grpcMethod,
+        url: address,
+        ...(Object.keys(sample).length ? { body: sample } : {}),
+        ...(Object.keys(headers).length ? { headers } : {}),
+      },
+    };
+  } finally {
+    config.signal?.removeEventListener("abort", onAbort);
+    await session.close().catch(() => {});
+  }
+}
+
+function protocolUrl(
+  endpoint: string | undefined,
+  base: string | undefined,
+  path: string,
+): string | undefined {
+  if (!base) return endpoint;
+  const origin = new URL(base);
+  const target = new URL(endpoint || path, base);
+  target.host = origin.host;
+  target.protocol = origin.protocol;
+  if (!endpoint && origin.pathname !== "/")
+    target.pathname = origin.pathname.replace(/\/$/, "") + path;
+  return target.href;
 }
 
 async function executeWebSocket(
@@ -584,49 +800,88 @@ async function executeWebSocket(
   op: OperationInfo,
   config: CliConfig,
   serverUrl?: string,
-): Promise<{ response: TestResult["response"]; request: TestResult["request"] }> {
-  const xWs = op.operation["x-ws"] ?? {};
-  const url = xWs.url ?? (serverUrl ?? config.serverUrl)?.replace(/^http/, "ws");
-  if (!url) throw new Error("WebSocket operation requires x-ws.url or --server");
+  values?: any,
+): Promise<{
+  response: TestResult["response"];
+  request: TestResult["request"];
+}> {
+  const xWs = op.operation["x-websocket"] ?? op.operation["x-ws"] ?? {};
+  let url = protocolUrl(
+    xWs.url,
+    serverUrl ?? config.serverUrl,
+    op.path,
+  )?.replace(/^http/, "ws");
+  if (!url)
+    throw new Error("WebSocket operation requires x-ws.url or --server");
 
+  const headers = { ...config.headers };
+  url = sessionAuth(config, headers, queryUrl(url, values?.query))!;
+  const agents = transportAgents(config);
   const session = client.connect({
     kind: "websocket",
+    openTimeoutMs: config.timeout ?? 30000,
+    signal: config.signal,
+    clientOptions: {
+      ...tlsOptions(config),
+      agent: url.startsWith("wss:") ? agents.https : agents.http,
+    },
     url,
     subprotocols: xWs.subprotocols,
-    headers: config.headers,
+    headers,
   });
 
-  await session.open();
+  const onAbort = () => {
+    void session.close().catch(() => {});
+  };
+  config.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    if (config.signal?.aborted) throw new Error("Run cancelled.");
+    await session.open();
+    if (config.signal?.aborted) throw new Error("Run cancelled.");
 
-  // Send the first message from x-ws.send if defined.
-  const messages = xWs.send ?? [];
-  for (const msg of messages.slice(0, 3)) {
-    await session.send(msg);
+    // Send the first message from x-ws.send if defined.
+    const messages =
+      values?.body !== undefined ? [values.body] : (xWs.send ?? []);
+    for (const msg of messages.slice(0, 3)) {
+      await session.send(msg);
+    }
+
+    // Wait briefly for inbound messages.
+    await new Promise((r) =>
+      setTimeout(r, Math.min(500, config.timeout ?? 500)),
+    );
+    await session.close();
+
+    const events = (session as any).events ?? [];
+    const inbound = events.filter(
+      (e: any) => e.direction === "in" && e.kind !== "open",
+    );
+
+    const response: TestResult["response"] = {
+      status: 101,
+      statusText: "Switching Protocols",
+      body: inbound.map((e: any) => e.data),
+      events: events.map((e: any) => ({
+        kind: e.kind,
+        direction: e.direction,
+        data: e.data,
+      })),
+      streaming: true,
+    };
+    return {
+      response,
+      request: {
+        method: "WS",
+        url,
+        ...(messages.length ? { body: messages.slice(0, 3) } : {}),
+        ...(Object.keys(headers).length ? { headers } : {}),
+      },
+    };
+  } finally {
+    config.signal?.removeEventListener("abort", onAbort);
+    await session.close().catch(() => {});
+    for (const agent of new Set<any>(Object.values(agents))) agent.destroy();
   }
-
-  // Wait briefly for inbound messages.
-  await new Promise((r) => setTimeout(r, 500));
-  await session.close();
-
-  const events = (session as any).events ?? [];
-  const inbound = events.filter((e: any) => e.direction === "in" && e.kind !== "open");
-
-  const response: TestResult["response"] = {
-    status: 101,
-    statusText: "Switching Protocols",
-    body: inbound.map((e: any) => e.data),
-    events: events.map((e: any) => ({ kind: e.kind, direction: e.direction, data: e.data })),
-    streaming: true,
-  };
-  return {
-    response,
-    request: {
-      method: "WS",
-      url,
-      ...(messages.length ? { body: messages.slice(0, 3) } : {}),
-      ...(config.headers ? { headers: config.headers } : {}),
-    },
-  };
 }
 
 async function executeMcp(
@@ -634,69 +889,64 @@ async function executeMcp(
   op: OperationInfo,
   config: CliConfig,
   serverUrl?: string,
-): Promise<{ response: TestResult["response"]; request: TestResult["request"] }> {
+  values?: any,
+): Promise<{
+  response: TestResult["response"];
+  request: TestResult["request"];
+}> {
   const xMcp = op.operation["x-mcp"] ?? {};
-  const endpoint = xMcp.endpoint ?? serverUrl ?? config.serverUrl;
-  const method = xMcp.method ?? "tools/call";
-  const name = xMcp.name;
-  const args = xMcp.arguments ?? {};
-
-  if (config.mcpTransport === "stdio") {
-    if (!config.mcpCommand) throw new Error("MCP stdio requires --mcp-command");
-    const session = client.connect({
-      kind: "mcp",
-      transport: "stdio",
-      command: config.mcpCommand,
-      args: config.mcpArgs,
-      cwd: config.mcpCwd,
+  const transport = config.mcpTransport ?? xMcp.transport ?? "streamable-http";
+  const headers = { ...config.headers };
+  let endpoint = protocolUrl(
+    xMcp.endpoint,
+    serverUrl ?? config.serverUrl,
+    op.path,
+  );
+  if (transport !== "stdio") {
+    rejectUnsupportedTransport(config, "MCP HTTP");
+    endpoint = sessionAuth(
+      config,
+      headers,
+      endpoint ? queryUrl(endpoint, values?.query) : endpoint,
+    );
+  }
+  const method = values?.body?.method ?? xMcp.method ?? "tools/call";
+  const params =
+    values?.body?.params ??
+    xMcp.params ??
+    (method === "tools/call"
+      ? { name: xMcp.name, arguments: values?.body ?? xMcp.arguments ?? {} }
+      : {});
+  const session: any = client.connect({
+    kind: "mcp",
+    transport: transport === "stdio" ? "stdio" : "streamable-http",
+    endpoint,
+    headers,
+    command: config.mcpCommand ?? xMcp.command,
+    args: config.mcpArgs ?? xMcp.args,
+    cwd: config.mcpCwd ?? xMcp.cwd,
+    timeoutMs: config.timeout ?? 30000,
+  } as any);
+  const onAbort = () => {
+    void session.close().catch(() => {});
+  };
+  config.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    if (config.signal?.aborted) throw new Error("Run cancelled.");
+    await session.open();
+    if (config.signal?.aborted) throw new Error("Run cancelled.");
+    const result = await session.request(method, params, {
+      signal: config.signal,
       timeoutMs: config.timeout,
     });
-    await session.open();
-    const result = await (session as any).request(method, { name, arguments: args });
-    await session.close();
     return {
-      response: { status: 200, statusText: "OK", body: result },
-      request: { method, target: name, body: { name, arguments: args } },
+      response: { status: 200, statusText: "OK", body: { result } },
+      request: { method, url: endpoint, headers, body: params },
     };
+  } finally {
+    config.signal?.removeEventListener("abort", onAbort);
+    await session.close().catch(() => {});
   }
-
-  // Streamable HTTP one-shot via client.send.
-  const spec = {
-    openapi: "3.2.0",
-    info: { title: "mcp", version: "1.0.0" },
-    paths: {
-      "/mcp": {
-        post: {
-          operationId: op.operationId,
-          "x-protocol": "mcp",
-          "x-mcp": { endpoint, method, name, arguments: args },
-          responses: { "200": { description: "ok" } },
-        },
-      },
-    },
-  };
-
-  const result = await client.send({
-    spec,
-    target: { path: "/mcp", method: "post" },
-    timeout: config.timeout,
-    mcp: config.headers ? { headers: config.headers } : undefined,
-  });
-
-  const request = (result as { request?: TestResult["request"] }).request;
-  return {
-    response: {
-      status: result.response?.status,
-      statusText: result.response?.statusText,
-      body: result.response?.body,
-    },
-    request: {
-      ...(request ? { url: request.url, headers: request.headers } : {}),
-      method,
-      target: name,
-      body: { name, arguments: args },
-    },
-  };
 }
 
 function buildGrpcSample(operation: any): Record<string, unknown> {
@@ -706,7 +956,10 @@ function buildGrpcSample(operation: any): Record<string, unknown> {
   const schema = operation.requestBody?.content?.["application/json"]?.schema;
   if (schema?.properties) {
     const out: Record<string, unknown> = {};
-    for (const [key, prop] of Object.entries(schema.properties) as [string, any][]) {
+    for (const [key, prop] of Object.entries(schema.properties) as [
+      string,
+      any,
+    ][]) {
       out[key] = prop.default ?? sampleValue(prop.type);
     }
     return out;
@@ -716,17 +969,26 @@ function buildGrpcSample(operation: any): Record<string, unknown> {
 
 function sampleValue(type: string): unknown {
   switch (type) {
-    case "string": return "";
+    case "string":
+      return "";
     case "number":
-    case "integer": return 0;
-    case "boolean": return false;
-    case "array": return [];
-    case "object": return {};
-    default: return "";
+    case "integer":
+      return 0;
+    case "boolean":
+      return false;
+    case "array":
+      return [];
+    case "object":
+      return {};
+    default:
+      return "";
   }
 }
 
-export function buildSummary(results: TestResult[], durationMs: number): TestSummary {
+export function buildSummary(
+  results: TestResult[],
+  durationMs: number,
+): TestSummary {
   const total = results.length;
   const passed = results.filter((r) => r.status === "passed").length;
   const failed = results.filter((r) => r.status === "failed").length;
