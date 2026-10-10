@@ -1,6 +1,6 @@
 {
   "name": "@powerduck/openapi-cli",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "description": "CI-ready CLI for batch-testing OpenAPI documents across HTTP, SSE, WebSocket, GraphQL, gRPC and MCP",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -50,8 +50,8 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@powerduck/openapi-parser": "^0.3.5",
-    "@powerduck/openapi-request": "^0.2.12",
+    "@powerduck/openapi-parser": "^0.3.9",
+    "@powerduck/openapi-request": "^0.2.15",
     "commander": "^12.1.0",
     "https-proxy-agent": "^5.0.1"
   },

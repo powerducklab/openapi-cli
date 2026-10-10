@@ -1,3 +1,4 @@
+import { operationEntries } from "@powerduck/openapi-parser/methods";
 /**
  * Batch test runner. Iterates over all operations in an OpenAPI spec,
  * executes each via @powerduck/openapi-request, runs assertions, and collects
@@ -203,13 +204,12 @@ export function collectOperations(
   config: CliConfig,
 ): OperationInfo[] {
   const ops: OperationInfo[] = [];
-  const methods = ["get", "post", "put", "delete", "patch", "head", "options"];
+
 
   for (const [path, pathItemRaw] of Object.entries(spec.paths ?? {})) {
     if (!pathItemRaw || typeof pathItemRaw !== "object") continue;
     const pathItem = pathItemRaw as Record<string, any>;
-    for (const method of methods) {
-      const operation = pathItem[method];
+    for (const [method, operation] of operationEntries(pathItem)) {
       if (!operation || typeof operation !== "object") continue;
 
       const opInfo: OperationInfo = {

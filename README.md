@@ -277,3 +277,7 @@ per-target `{proxy, tls}` settings, for example system proxies, bypass rules and
 host-specific client certificates. JSON configuration also forwards `requester`
 (`followRedirects`, `maxRedirects`, `disableCookies`, `protocolVersion`) and
 `maxEvents`, `maxStreamMs`, `maxResponseSize` to supported request transports.
+
+### Extended HTTP methods
+
+HTTP operation discovery includes all nine fixed OpenAPI 3.2 methods (including `trace` and `query`) and custom verbs in `additionalOperations`, such as `PROPFIND`, `REPORT`, and `CUSTOM-VERB`. Shared method helpers come from `@powerduck/openapi-parser/methods`; path metadata is not interpreted as an operation. Custom verbs must be valid HTTP tokens. Use OpenAPI 3.2 when declaring QUERY or `additionalOperations`.
