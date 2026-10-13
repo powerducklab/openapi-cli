@@ -288,3 +288,14 @@ describe("HTML reporter", () => {
     expect(fs.existsSync(filePath)).toBe(true);
   });
 });
+
+
+it("keeps hostile response content inside the report data rather than executable HTML", () => {
+  const payload = '</script><script>globalThis.injected = true</script>';
+  const report = { ...sampleReport, results: [{ ...sampleReport.results[0]!, error: payload }] };
+  const html = fs.readFileSync(generateHtmlReport(report, tmpDir), 'utf8');
+  expect(html).not.toContain(payload);
+  expect((html.match(/<script>/g) ?? []).length).toBe(1);
+  const data = html.match(/const D=(.*);/)!;
+  expect(JSON.parse(data[1]!).results[0].error).toBe(payload);
+});

@@ -16,7 +16,8 @@ export function generateHtmlReport(report: TestReport, outputDir: string): strin
 
 function renderHtml(report: TestReport): string {
   const { summary, results } = report;
-  const data = JSON.stringify({ summary, results });
+  // JSON is embedded in an HTML script element: raw '<' can end it even inside a string.
+  const data = JSON.stringify({ summary, results }).replace(/</g, "\\u003c");
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -176,7 +177,7 @@ function render(f){
     const eb=r.error?'<div class="errbox">'+esc(r.error)+'</div>':'';
     const rm=r.response?\`
       <div class="rmeta">
-        \${r.response.status!=null?'<span>Status <strong>'+r.response.status+(r.response.statusText?' '+r.response.statusText:'')+'</strong></span>':''}
+        \${r.response.status!=null?'<span>Status <strong>'+r.response.status+(r.response.statusText?' '+esc(r.response.statusText):'')+'</strong></span>':''}
         \${r.response.contentType?'<span>Type <strong>'+esc(r.response.contentType)+'</strong></span>':''}
         \${r.response.sizeBytes!=null?'<span>Size <strong>'+r.response.sizeBytes+'B</strong></span>':''}
         \${r.response.streaming?'<span>Streaming <strong>yes</strong></span>':''}
@@ -185,9 +186,9 @@ function render(f){
       <div class="row \${r.status}" data-s="\${r.status}">
         <div class="row-head" onclick="this.parentElement.classList.toggle('open')">
           <div class="dot \${r.status==='passed'?'pass':r.status==='failed'?'fail':'err'}"></div>
-          <span class="method">\${r.method}</span>
+          <span class="method">\${esc(r.method)}</span>
           <span class="path">\${esc(r.path)}</span>
-          \${r.protocol?'<span class="proto">'+r.protocol+'</span>':''}
+          \${r.protocol?'<span class="proto">'+esc(r.protocol)+'</span>':''}
           <span class="dur">\${r.durationMs}ms</span>
           <span class="chev">▶</span>
         </div>

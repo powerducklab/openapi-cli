@@ -238,7 +238,7 @@ MIT © [POWERDUCK LIMITED](https://www.powerduck.com)
 
 ## Transport and scenario contract (0.2.13)
 
-Requires Node.js 18.17 or newer. CLI arguments override JSON configuration only
+Requires Node.js 22.17 or newer. CLI arguments override JSON configuration only
 when explicitly supplied; `openapi-cli --config config.json` accepts `specPath`
 from that file. Concurrency must be an integer from 1–100 and timeout from
 1–600000 milliseconds. Report versions match the installed package.
