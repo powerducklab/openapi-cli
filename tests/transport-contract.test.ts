@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { test, expect, vi } from "vitest";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -227,6 +227,13 @@ test("HTTP applies custom CA and encoded proxy credentials to CONNECT agents", a
     }
   });
   const proxyPort = await listen(proxy);
+  // A shell proxy must not override the explicitly configured CONNECT agent.
+  vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:1");
+  vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:1");
+  vi.stubEnv("http_proxy", "http://127.0.0.1:1");
+  vi.stubEnv("https_proxy", "http://127.0.0.1:1");
+  vi.stubEnv("NO_PROXY", "");
+  vi.stubEnv("no_proxy", "");
   try {
     const operation = { responses: { 200: { description: "OK" } } };
     const result = await executeStep(createClient(), op(operation, "http"), {
@@ -245,6 +252,7 @@ test("HTTP applies custom CA and encoded proxy credentials to CONNECT agents", a
       `Basic ${Buffer.from("user:p@ss").toString("base64")}`,
     );
   } finally {
+    vi.unstubAllEnvs();
     for (const socket of sockets) socket.destroy();
     await close(proxy);
     await close(target);

@@ -563,10 +563,12 @@ async function executeHttp(
     op.protocol === "graphql" ? undefined : transportAgents(config);
   const runnerOptions: any = {
     ...config.httpRuntime,
+    // postman-runtime reads this option at the run level, not requester.
+    // Explicit transport agents must not be replaced by shell proxy settings.
+    ignoreProxyEnvironmentVariables: true,
     requester: {
       ...config.requester,
       strictSSL: config.tls?.strictSSL !== false,
-      ignoreProxyEnvironmentVariables: true,
       ...(agents
         ? {
             agents,
