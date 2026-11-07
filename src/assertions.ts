@@ -46,7 +46,12 @@ export function runDeclarativeAssertions(
   return assertions.map((a) => {
     try {
       const passed = evaluateAssertion(a, ctx);
-      return { name: a.name, passed };
+      const evidence = a.assert === "jsonPath" && a.path ? (() => {
+        const actual = resolveJsonPath(ctx.body, a.path!);
+        const presence = a.exists !== undefined || a.equals === undefined;
+        return { kind: a.assert, path: a.path, expected: presence ? a.exists ?? true : a.equals, actual: presence ? actual !== undefined : actual };
+      })() : undefined;
+      return { name: a.name, passed, ...(evidence ? { evidence } : {}) };
     } catch (e) {
       return {
         name: a.name,
@@ -115,24 +120,35 @@ function findHeader(headers: Record<string, string>, name: string): string | und
   return undefined;
 }
 
-/**
- * Minimal JSONPath resolver supporting dot notation and array indices.
- * e.g. "$.data.items[0].id" or "data.user.name"
- */
+/** Resolve paths without evaluating JavaScript. Filters use strict literal equality. */
 export function resolveJsonPath(obj: unknown, path: string): unknown {
-  const clean = path.replace(/^\$\.?/, "");
-  if (!clean) return obj;
-  const parts = clean.split(/\.|\[(\d+)\]/).filter((p) => p !== undefined && p !== "");
-  let current: unknown = obj;
-  for (const part of parts) {
-    if (current === null || current === undefined) return undefined;
-    if (/^\d+$/.test(part)) {
-      current = (current as unknown[])[Number(part)];
+  let rest = path.trim().replace(/^\$/, "");
+  let values: unknown[] = [obj];
+  let plural = false;
+  while (rest) {
+    const property = /^(?:\.|^)([\p{L}_$][\p{L}\p{N}_$-]*)/u.exec(rest);
+    const index = /^\[(\d+)\]/.exec(rest);
+    const filter = /^\[\?\(\s*@((?:\.[\p{L}_$][\p{L}\p{N}_$-]*|\[\d+\])*)\s*===?\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)\s*\)\]/u.exec(rest);
+    if (filter) {
+      const literal = filter[2];
+      const expected: unknown = literal.startsWith("'")
+        ? JSON.parse('"' + literal.slice(1, -1).replace(/\\'/g, "'").replace(/"/g, '\\"') + '"')
+        : JSON.parse(literal);
+      values = values.flatMap(value => Array.isArray(value)
+        ? value.filter(item => resolveJsonPath(item, '$' + filter[1]) === expected) : []);
+      plural = true;
+      rest = rest.slice(filter[0].length);
+    } else if (property || index) {
+      const match = (property || index)!;
+      const key = match[1];
+      values = values.map(value => value !== null && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key)
+        ? (value as Record<string, unknown>)[key] : undefined).filter(value => value !== undefined);
+      rest = rest.slice(match[0].length);
     } else {
-      current = (current as Record<string, unknown>)[part];
+      throw new Error('Unsupported JSONPath syntax: use dot properties, [n], or [?(@.field == "value")]');
     }
   }
-  return current;
+  return plural ? (values.length ? values : undefined) : values[0];
 }
 
 function deepEqual(a: unknown, b: unknown): boolean {

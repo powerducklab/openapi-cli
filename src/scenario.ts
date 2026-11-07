@@ -20,6 +20,7 @@ import packageJson from "../package.json";
  * Progress is streamed through `onEvent`, and an AbortSignal cancels the run.
  */
 import { createClient } from "@powerduck/openapi-request";
+import postmanRequest from "postman-request";
 import {
   buildSummary,
   collectOperations,
@@ -250,6 +251,11 @@ export async function runScenario(
   });
 
   outer: for (let s = 0; s < scenarioRows.length; s++) {
+    // Share runtime cookies within one flow, never between independent iterations/runs.
+    const iterationConfig: CliConfig = {
+      ...config,
+      requester: { ...config.requester, cookieJar: postmanRequest.jar() },
+    };
     // Every scenario iteration starts from an independent variable scope.
     active = {
       ...(config.variables ?? {}),
@@ -317,13 +323,14 @@ export async function runScenario(
 
         const iterationScope = { ...active, ...(stepRows[t] ?? {}) };
         const execution = await executeStep(client, op, {
-          config,
+          config: iterationConfig,
           spec,
           signal,
           variables: iterationScope,
           values: step.request?.values,
           serverUrl: step.request?.serverUrl,
           extraAssertions: step.request?.assertions,
+          scripts: step.request?.scripts,
         });
 
         if (signal?.aborted) cancelled = true;

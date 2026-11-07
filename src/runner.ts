@@ -288,6 +288,7 @@ export interface StepExecutionOptions {
   serverUrl?: string;
   /** Declarative assertions added beyond those declared on the operation. */
   extraAssertions?: DeclarativeAssertion[];
+  scripts?: { preRequest?: string; test?: string };
 }
 
 export interface StepExecution {
@@ -392,7 +393,15 @@ export async function executeStep(
     )
       throw new Error(`Unsupported protocol: ${op.protocol}`);
     const specAssertions = extractAssertions(op.operation, op.pathItem);
-    const assertions = [...specAssertions, ...(options.extraAssertions ?? [])];
+    // Assertions share the same per-execution scope as request values, including
+    // values extracted by preceding steps and the current data row. Keep names
+    // stable so consumers can correlate results with their declarations.
+    const assertions = [...specAssertions, ...(options.extraAssertions ?? [])].map(
+      ({ name, ...expectation }) => ({ ...resolveValue(expectation, vars), name }),
+    );
+    if (options.scripts && !["http", "sse", "graphql"].includes(op.protocol)) {
+      throw new Error(`Step scripts are not supported for ${op.protocol}.`);
+    }
     const postmanTest = extractPostmanScripts(op.operation);
     const postmanAssertions: any[] = [];
 
@@ -443,6 +452,7 @@ export async function executeStep(
       default: {
         const http = await executeHttp(client, op, config, spec, {
           postmanTest,
+          scripts: options.scripts,
           postmanAssertions,
           variables: options.variables,
           values: options.values,
@@ -541,6 +551,7 @@ export async function executeStep(
 interface HttpStepContext {
   signal?: AbortSignal;
   postmanTest: string | undefined;
+  scripts?: { preRequest?: string; test?: string };
   postmanAssertions: any[];
   variables?: Record<string, string>;
   values?: any;
@@ -609,8 +620,14 @@ async function executeHttp(
       variables: ctx.variables,
       timeout: config.timeout,
       runner: Object.keys(runnerOptions).length ? runnerOptions : undefined,
-      scripts: ctx.postmanTest
-        ? { test: { exec: ctx.postmanTest }, fromSpecExtensions: false }
+      scripts: ctx.scripts || ctx.postmanTest
+        ? {
+            ...(ctx.scripts?.preRequest ? { preRequest: { exec: ctx.scripts.preRequest } } : {}),
+            test: [ctx.postmanTest, ctx.scripts?.test]
+              .filter((exec): exec is string => typeof exec === "string" && exec.length > 0)
+              .map(exec => ({ exec })),
+            fromSpecExtensions: false,
+          }
         : undefined,
       onAssertion: (a: any) => {
         ctx.postmanAssertions.push({
@@ -635,16 +652,22 @@ async function executeHttp(
   const env: Record<string, string> = {};
   const scriptReport = (result as any).scripts as
     | {
-        prerequest?: Array<{ environment?: Record<string, string> }>;
-        test?: Array<{ environment?: Record<string, string> }>;
+        prerequest?: Array<{ environment?: Record<string, string>; error?: { name?: string; message: string } }>;
+        test?: Array<{ environment?: Record<string, string>; error?: { name?: string; message: string } }>;
       }
     | undefined;
   if (scriptReport) {
-    for (const outcome of [
-      ...(scriptReport.prerequest ?? []),
-      ...(scriptReport.test ?? []),
-    ]) {
-      if (outcome.environment) Object.assign(env, outcome.environment);
+    for (const phase of ["prerequest", "test"] as const) {
+      for (const outcome of scriptReport[phase] ?? []) {
+        if (outcome.environment) Object.assign(env, outcome.environment);
+        // Runtime exceptions are separate from pm.test assertion callbacks.
+        // Preserve the HTTP response while preventing a false successful run.
+        if (outcome.error) ctx.postmanAssertions.push({
+          name: `${phase}: ${outcome.error.name || "Error"}`,
+          passed: false,
+          error: outcome.error.message,
+        });
+      }
     }
   }
 

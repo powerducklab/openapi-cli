@@ -23,6 +23,14 @@ beforeAll(async () => {
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
 
+    if (url.pathname.startsWith("/cookies/")) {
+      res.setHeader("content-type", "application/json");
+      if (url.pathname === "/cookies/set") res.setHeader("set-cookie", ["session=round141; Path=/cookies; HttpOnly", "scoped=hidden; Path=/private"]);
+      if (url.pathname === "/cookies/clear") res.setHeader("set-cookie", "session=; Path=/cookies; Max-Age=0");
+      res.end(JSON.stringify({ cookie: req.headers.cookie ?? null }));
+      return;
+    }
+
     if (url.pathname === "/register" && req.method === "POST") {
       res.writeHead(201, { "content-type": "application/json" });
       res.end(JSON.stringify({ data: { accessToken: "tok-abc", userId: 42 } }));
@@ -153,6 +161,19 @@ const happyScenario: ScenarioDefinition = {
 };
 
 describe("runScenario happy path", () => {
+  it("resolves assertion expectations from preceding steps without mutating the plan", async () => {
+    const scenario = structuredClone(happyScenario);
+    scenario.steps[1].request!.assertions = [
+      { name: "token {{token}}", assert: "jsonPath", path: "$.authed", equals: "Bearer {{token}}" },
+      { name: "uid", assert: "jsonPath", path: "$.uid", equals: "{{uid}}" },
+      { name: "script", assert: "jsonPath", path: "$.script", equals: "{{scriptVar}}" },
+    ];
+    const report = await runScenario(scenario, { config });
+    expect(report.status).toBe("passed");
+    expect(report.steps[1].assertions?.find(a => a.name === "token {{token}}")?.passed).toBe(true);
+    expect(scenario.steps[1].request!.assertions[0].equals).toBe("Bearer {{token}}");
+  });
+
   it("runs steps in order and chains extracted + script variables", async () => {
     const events: string[] = [];
     const report = await runScenario(happyScenario, {
@@ -310,4 +331,55 @@ describe("runScenario cancellation and inputs", () => {
     expect(report.status).toBe("passed");
     expect(report.variables.username).toBe("alice");
   });
+});
+
+
+it("executes explicit step scripts and propagates their variables to the next request", async () => {
+  const report = await runScenario({ name: "script flow", steps: [
+    { ref: "POST /login", request: { values: { body: { username: "{{scriptUser}}" } }, scripts: {
+      preRequest: 'pm.environment.set("scriptUser", "script-round-3");',
+      test: 'pm.test("script body", function () { pm.expect(pm.response.json().received.username).to.eql("script-round-3"); }); pm.environment.set("nextScriptValue", "script-chained");',
+    } } },
+    { ref: "GET /me", request: { values: { header: { "x-script": "{{nextScriptValue}}" } }, assertions: [
+      { name: "chained script", assert: "jsonPath", path: "$.script", equals: "script-chained" },
+    ] } },
+  ] }, { config });
+  expect(report.status).toBe("passed");
+  expect(report.steps[0].assertions).toContainEqual(expect.objectContaining({ name: "script body", passed: true }));
+  expect(report.variables.nextScriptValue).toBe("script-chained");
+  expect(report.steps[1].status).toBe("passed");
+});
+
+it("reports a failing explicit script assertion instead of silently passing", async () => {
+  const report = await runScenario({ name: "script failure", steps: [
+    { ref: "GET /me", request: { scripts: { test: 'pm.test("must fail", function () { pm.expect(1).to.eql(2); });' } } },
+  ] }, { config });
+  expect(report.status).toBe("failed");
+  expect(report.steps[0].assertions).toContainEqual(expect.objectContaining({ name: "must fail", passed: false }));
+});
+
+it.each(["test", "preRequest"] as const)("does not report success when %s throws outside pm.test", async (phase) => {
+  const report = await runScenario({ name: "script exception", steps: [
+    { ref: "GET /me", request: { scripts: { [phase]: 'throw new Error("UI_SCRIPT_EXCEPTION_138");' } } },
+  ] }, { config });
+  expect(report.status).toBe("failed");
+  expect(report.steps[0].response?.status).toBe(200);
+  expect(JSON.stringify(report.steps[0])).toContain("UI_SCRIPT_EXCEPTION_138");
+});
+
+
+it("shares real cookies across steps, respects paths and expiry, and isolates runs", async () => {
+  const cookieSpec = { openapi: "3.0.3", info: { title: "Cookies", version: "1" },
+    servers: [{ url: `http://127.0.0.1:${port}` }],
+    paths: Object.fromEntries(["set", "echo", "clear"].map(name => [`/cookies/${name}`, { get: { responses: { "200": { description: "OK" } } } }])) };
+  const step = (name: string, cookie?: string | null) => ({ ref: `GET /cookies/${name}`, request: { assertions: [
+    { name: "HTTP success", assert: "status" as const, value: 200 },
+    ...(cookie !== undefined ? [{ name: "cookie", assert: "jsonPath" as const, path: "$.cookie", equals: cookie }] : []),
+  ] } });
+  const report = await runScenario({ name: "cookies", iterations: 2, steps: [step("echo", null), step("set"), step("echo", "session=round141"), step("clear"), step("echo", null), step("set")] }, { config, spec: cookieSpec });
+  expect(report.status).toBe("passed");
+  const isolated = await runScenario({ name: "isolated", steps: [step("echo", null)] }, { config, spec: cookieSpec });
+  expect(isolated.status).toBe("passed");
+  const disabled = await runScenario({ name: "disabled", steps: [step("set"), step("echo", null)] }, { config: { ...config, requester: { disableCookies: true } }, spec: cookieSpec });
+  expect(disabled.status).toBe("passed");
 });

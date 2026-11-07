@@ -230,3 +230,35 @@ describe("multiple assertions", () => {
     expect(results[2].passed).toBe(true);
   });
 });
+
+describe('array membership filters', () => {
+  const body = { tasks: [{ title: '第一轮任务', done: false }, { title: '第二轮任务', done: true }] };
+  it('matches the requested member rather than the first array element', () => {
+    expect(resolveJsonPath(body, '$.tasks[?(@.title == \'第二轮任务\')]')).toEqual([body.tasks[1]]);
+    expect(resolveJsonPath(body.tasks, '$[?(@.done === true)].title')).toEqual(['第二轮任务']);
+  });
+  it('does not pass presence checks for an empty result', () => {
+    for (const exists of [true, false]) {
+      expect(runDeclarativeAssertions([{ name: 'member', assert: 'jsonPath', path: '$.tasks[?(@.title == "missing")]', exists }], { body, durationMs: 0 })[0].passed).toBe(!exists);
+    }
+  });
+  it('returns execution evidence for matching filters', () => {
+    expect(runDeclarativeAssertions([{ name: 'member', assert: 'jsonPath', path: '$.tasks[?(@.done == true)]', equals: [] }], { body, durationMs: 0 })[0]).toMatchObject({ passed: false, evidence: { actual: [body.tasks[1]], expected: [] } });
+  });
+  it('uses strict types and own properties', () => {
+    expect(resolveJsonPath([{ id: 2 }, { id: '2' }], '$[?(@.id == 2)]')).toEqual([{ id: 2 }]);
+    expect(resolveJsonPath({}, '$.constructor')).toBeUndefined();
+  });
+  it('rejects malformed selectors and executable expressions, even for missing data', () => {
+    for (const path of ['$[?title == "x"]', '$[?(@.x == process.exit())]', '$.missing[*]', '$..tasks']) {
+      const result = runDeclarativeAssertions([{ name: 'invalid', assert: 'jsonPath', path, exists: false }], { body, durationMs: 0 })[0];
+      expect(result.passed).toBe(false);
+      expect(result.error).toContain('Unsupported JSONPath');
+    }
+  });
+  it('supports literal punctuation, nested fields and null', () => {
+    const rows = [{ nested: { title: 'a.b]c', value: null } }];
+    expect(resolveJsonPath(rows, '$[?(@.nested.title == "a.b]c")]')).toEqual(rows);
+    expect(resolveJsonPath(rows, '$[?(@.nested.value == null)]')).toEqual(rows);
+  });
+});

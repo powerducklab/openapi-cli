@@ -74,6 +74,8 @@ export interface CliConfig {
     url?: string;
   }) => Promise<Pick<CliConfig, "proxy" | "tls" | "httpRuntime">>;
   requester?: {
+    /** Internal/programmatic runtime cookie jar, never serialized over IPC. */
+    cookieJar?: unknown;
     followRedirects?: boolean;
     maxRedirects?: number;
     disableCookies?: boolean;
@@ -125,6 +127,7 @@ export interface CliConfig {
 }
 
 export interface AssertionResult {
+  evidence?: { kind: string; path?: string; expected: unknown; actual: unknown };
   name: string;
   passed: boolean;
   error?: string;
@@ -214,6 +217,8 @@ export type ScenarioDataRow = Record<string, string>;
 
 /** Per-step request overrides and verification rules. */
 export interface ScenarioStepRequest {
+  /** Explicit sandboxed Postman-compatible step scripts. */
+  scripts?: { preRequest?: string; test?: string };
   /** Request values merged over the operation's sampled defaults. */
   values?: RequestValues;
   /** Override the resolved server URL for this step only. */
